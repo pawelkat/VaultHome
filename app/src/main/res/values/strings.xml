@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">VaultHome</string>
+    <string name="widget_name">VaultHome</string>
+    <string name="widget_description">Search the vault from the home screen</string>
+    <string name="widget_loading">VaultHome</string>
+    <string name="widget_search_hint">Search the vault</string>
+</resources>
