@@ -34,6 +34,14 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.vaulthome.app.VaultHomeApp
 import com.vaulthome.app.index.ObsidianLinks
+import com.vaulthome.app.markdown.MarkdownBlocks
+import com.vaulthome.app.markdown.MarkdownText
+import com.vaulthome.app.markdown.SafeLinks
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.FilterChip
+import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -47,6 +55,7 @@ fun NoteScreen(path: String, onBack: () -> Unit) {
     val keyboard = LocalSoftwareKeyboardController.current
     var body by remember(path) { mutableStateOf("Loading the note…") }
     var error by remember(path) { mutableStateOf<String?>(null) }
+    var raw by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(path) {
         keyboard?.hide()
         val graph = (context.applicationContext as VaultHomeApp).graph
@@ -99,6 +108,10 @@ fun NoteScreen(path: String, onBack: () -> Unit) {
         if (error != null) {
             Text(error!!, color = MaterialTheme.colorScheme.error)
         }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(selected = !raw, onClick = { raw = false }, label = { Text("Rendered") })
+            FilterChip(selected = raw, onClick = { raw = true }, label = { Text("Raw") })
+        }
         Box(
             modifier = Modifier
                 .weight(1f)
@@ -107,15 +120,57 @@ fun NoteScreen(path: String, onBack: () -> Unit) {
                 .verticalScroll(rememberScrollState())
                 .padding(12.dp),
         ) {
-            SelectionContainer {
-                Text(
-                    text = body,
-                    color = PageInk,
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodyMedium,
+            if (raw) {
+                SelectionContainer {
+                    Text(
+                        text = body,
+                        color = PageInk,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            } else {
+                RenderedNote(
+                    markdown = body,
+                    onLink = { uri ->
+                        if (SafeLinks.isSafe(uri)) {
+                            try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(uri))) } catch (_: ActivityNotFoundException) {}
+                        }
+                    },
+                    onWikiLink = { target ->
+                        try {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ObsidianLinks.vaultFileUri(target))))
+                        } catch (_: ActivityNotFoundException) {
+                            error = "Obsidian is not installed"
+                        }
+                    },
                 )
             }
         }
-        Text("Raw note", color = PageMuted, style = MaterialTheme.typography.labelSmall)
+        Text(if (raw) "Raw note" else "Rendered note (read-only)", color = PageMuted, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
+/** Frontmatter stripped (tags shown as chips), body rendered by [MarkdownText]. Read-only. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+fun RenderedNote(markdown: String, onLink: (String) -> Unit, onWikiLink: ((String) -> Unit)? = null) {
+    val parts = remember(markdown) { MarkdownBlocks.splitFrontmatter(markdown) }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (parts.tags.isNotEmpty()) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                parts.tags.forEach { tag ->
+                    Text(
+                        "#$tag",
+                        color = PageMuted,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.background(Color(0xFF1A1A1A), RoundedCornerShape(8.dp)).padding(horizontal = 8.dp, vertical = 3.dp),
+                    )
+                }
+            }
+        }
+        SelectionContainer {
+            MarkdownText(parts.body, onLink = onLink, onWikiLink = onWikiLink, modifier = Modifier.fillMaxWidth())
+        }
     }
 }
