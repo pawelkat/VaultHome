@@ -54,14 +54,15 @@ fun HomeScreen(viewModel: VaultHomeViewModel, onIndex: () -> Unit, onSettings: (
         if (found != null || daily == null) daily = found
         loading = false
     }
-    val actions: @Composable RowScope.() -> Unit = { HomeActions(viewModel, onIndex, onSettings) }
+    val actions: @Composable RowScope.() -> Unit = { ReindexAction(viewModel, onIndex) }
+    val topBar: @Composable RowScope.() -> Unit = { SettingsAction(onSettings) }
     var opened by rememberSaveable { mutableStateOf<String?>(null) }
     val path = daily ?: opened
     if (path != null) {
-        NoteScreen(path = path, viewModel = viewModel, onBack = { if (daily == null) opened = null else onExit() }, actions = actions)
+        NoteScreen(path = path, viewModel = viewModel, onBack = { if (daily == null) opened = null else onExit() }, actions = actions, topBar = topBar)
     } else {
         BackHandler(onBack = onExit)
-        SearchScaffold(viewModel = viewModel, onOpen = { opened = it }, actions = actions) {
+        SearchScaffold(viewModel = viewModel, onOpen = { opened = it }, actions = actions, topBar = topBar) {
             IndexStatusLine(viewModel)
             Box(Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
                 Text(
@@ -75,15 +76,19 @@ fun HomeScreen(viewModel: VaultHomeViewModel, onIndex: () -> Unit, onSettings: (
 }
 
 @Composable
-fun HomeActions(viewModel: VaultHomeViewModel, onIndex: () -> Unit, onSettings: () -> Unit) {
+fun ReindexAction(viewModel: VaultHomeViewModel, onIndex: () -> Unit) {
     val index by viewModel.index.collectAsStateWithLifecycle()
     val busy = index.phase == "downloading" || index.phase == "indexing"
     IconButton(onClick = onIndex, enabled = !busy) {
         if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
         else Icon(Icons.Filled.Refresh, contentDescription = "Reindex vault", tint = Color(0xFFB0B0B0))
     }
-    IconButton(onClick = onSettings) {
-        Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = Color(0xFFB0B0B0))
+}
+
+@Composable
+fun SettingsAction(onSettings: () -> Unit) {
+    IconButton(onClick = onSettings, modifier = Modifier.size(32.dp)) {
+        Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = Color(0xFFB0B0B0), modifier = Modifier.size(20.dp))
     }
 }
 

@@ -58,6 +58,7 @@ fun NoteScreen(
     viewModel: VaultHomeViewModel,
     onBack: () -> Unit,
     actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
+    topBar: (@Composable androidx.compose.foundation.layout.RowScope.() -> Unit)? = null,
 ) {
     // In-app back stack for wikilink navigation; system back pops it before leaving the screen.
     var stack by rememberSaveable(path) { mutableStateOf(listOf(path)) }
@@ -74,6 +75,7 @@ fun NoteScreen(
         viewModel = viewModel,
         canGoBack = stack.size > 1,
         actions = actions,
+        topBar = topBar,
     ) }
 }
 
@@ -85,7 +87,8 @@ object NoteStack {
 
 @Composable
 private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -> Unit, viewModel: VaultHomeViewModel,
-    canGoBack: Boolean, actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
+    canGoBack: Boolean, actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
+    topBar: (@Composable androidx.compose.foundation.layout.RowScope.() -> Unit)?) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -131,7 +134,7 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
         }
         loaded = true
     }
-    SearchScaffold(viewModel = viewModel, onOpen = { if (it != path) onOpenNote(it) }, actions = actions) {
+    SearchScaffold(viewModel = viewModel, onOpen = { if (it != path) onOpenNote(it) }, actions = actions, topBar = topBar) {
         IndexStatusLine(viewModel)
         Text(path, color = PageInk, style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

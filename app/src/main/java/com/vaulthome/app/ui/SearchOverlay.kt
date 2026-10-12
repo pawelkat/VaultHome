@@ -50,6 +50,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.ImeAction
@@ -72,6 +73,7 @@ fun SearchScaffold(
     viewModel: VaultHomeViewModel,
     onOpen: (String) -> Unit,
     actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
+    topBar: (@Composable androidx.compose.foundation.layout.RowScope.() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val home by viewModel.home.collectAsStateWithLifecycle()
@@ -90,7 +92,8 @@ fun SearchScaffold(
     }
     Box(Modifier.fillMaxSize().systemBarsPadding()) {
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.onGloballyPositioned { barBottom = it.size.height }) {
+            if (topBar != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically, content = topBar)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.onGloballyPositioned { barBottom = (it.positionInParent().y + it.size.height).toInt() }) {
             OutlinedTextField(
                 value = home.query,
                 onValueChange = viewModel::onQueryChange,
