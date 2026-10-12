@@ -64,18 +64,22 @@ class MainActivity : ComponentActivity() {
                 }
             }
             VaultHomeTheme {
+                // Home stays in a saveable slot so its note back stack & scroll survive Settings.
+                val holder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
                 when {
                     showSettings -> SettingsScreen(
                         viewModel = viewModel,
                         onPickVault = pickVaultTree,
                         onBack = { showSettings = false },
                     )
-                    else -> HomeScreen(
-                        viewModel = viewModel,
-                        onIndex = startIndex,
-                        onSettings = { showSettings = true },
-                        onExit = { finish() },
-                    )
+                    else -> holder.SaveableStateProvider("home") {
+                        HomeScreen(
+                            viewModel = viewModel,
+                            onIndex = startIndex,
+                            onSettings = { showSettings = true },
+                            onExit = { finish() },
+                        )
+                    }
                 }
             }
         }

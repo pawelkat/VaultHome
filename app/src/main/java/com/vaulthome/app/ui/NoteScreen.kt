@@ -61,14 +61,26 @@ fun NoteScreen(
 ) {
     // In-app back stack for wikilink navigation; system back pops it before leaving the screen.
     var stack by rememberSaveable(path) { mutableStateOf(listOf(path)) }
-    NoteContent(
+    // One saveable slot per stack entry: scroll position / raw toggle survive back navigation,
+    // Settings round-trips and process death; popped entries are dropped.
+    val holder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
+    val entryKey = "${stack.size - 1}:${stack.last()}"
+    holder.SaveableStateProvider(entryKey) { NoteContent(
         path = stack.last(),
-        onBack = { if (stack.size > 1) stack = stack.dropLast(1) else onBack() },
-        onOpenNote = { stack = stack + it },
+        onBack = {
+            if (stack.size > 1) { holder.removeState(entryKey); stack = NoteStack.pop(stack) } else onBack()
+        },
+        onOpenNote = { stack = NoteStack.push(stack, it) },
         viewModel = viewModel,
         canGoBack = stack.size > 1,
         actions = actions,
-    )
+    ) }
+}
+
+/** Pure back-stack rules (unit-tested). */
+object NoteStack {
+    fun push(stack: List<String>, path: String) = if (stack.lastOrNull() == path) stack else stack + path
+    fun pop(stack: List<String>) = if (stack.size > 1) stack.dropLast(1) else stack
 }
 
 @Composable
@@ -81,6 +93,16 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
     var body by remember(path) { mutableStateOf("Loading the note…") }
     var error by remember(path) { mutableStateOf<String?>(null) }
     var raw by rememberSaveable { mutableStateOf(false) }
+    // Scroll is restored only after the body has loaded (an early restore would be clamped to the placeholder).
+    val scroll = rememberScrollState()
+    var savedScroll by rememberSaveable(path) { mutableStateOf(0) }
+    var loaded by remember(path) { mutableStateOf(false) }
+    LaunchedEffect(loaded) {
+        if (!loaded) return@LaunchedEffect
+        kotlinx.coroutines.android.awaitFrame()
+        scroll.scrollTo(savedScroll)
+        androidx.compose.runtime.snapshotFlow { scroll.value }.collect { savedScroll = it }
+    }
     LaunchedEffect(path) {
         keyboard?.hide()
         val graph = (context.applicationContext as VaultHomeApp).graph
@@ -107,6 +129,7 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
         } else if (error == null) {
             error = "Showing the indexed text. The full file could not be read."
         }
+        loaded = true
     }
     SearchScaffold(viewModel = viewModel, onOpen = { if (it != path) onOpenNote(it) }, actions = actions) {
         IndexStatusLine(viewModel)
@@ -137,7 +160,7 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
                 .weight(1f)
                 .fillMaxWidth()
                 .background(Color(0xFF101010))
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scroll)
                 .padding(12.dp),
         ) {
             if (raw) {

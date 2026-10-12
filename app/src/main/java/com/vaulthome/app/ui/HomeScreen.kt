@@ -20,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,20 +40,22 @@ import java.time.LocalDate
 fun HomeScreen(viewModel: VaultHomeViewModel, onIndex: () -> Unit, onSettings: () -> Unit, onExit: () -> Unit) {
     val context = LocalContext.current
     val index by viewModel.index.collectAsStateWithLifecycle()
-    var loading by remember { mutableStateOf(true) }
-    var daily by remember { mutableStateOf<String?>(null) }
+    // Saveable so the first composition after Settings / recreation / process death goes straight to the note.
+    var loading by rememberSaveable { mutableStateOf(true) }
+    var daily by rememberSaveable { mutableStateOf<String?>(null) }
     // Re-resolve on launch and whenever an index run finishes (a new daily note may have appeared).
     LaunchedEffect(index.phase == "ready") {
         val graph = (context.applicationContext as VaultHomeApp).graph
-        daily = withContext(Dispatchers.IO) {
+        val found = withContext(Dispatchers.IO) {
             val indexed = graph.database.chunks().allNotes().map { it.path }
             val paths = indexed.ifEmpty { runCatching { graph.reader.scan().map { it.relativePath } }.getOrDefault(emptyList()) }
             DailyNotes.latest(paths, LocalDate.now())
         }
+        if (found != null || daily == null) daily = found
         loading = false
     }
     val actions: @Composable RowScope.() -> Unit = { HomeActions(viewModel, onIndex, onSettings) }
-    var opened by remember { mutableStateOf<String?>(null) }
+    var opened by rememberSaveable { mutableStateOf<String?>(null) }
     val path = daily ?: opened
     if (path != null) {
         NoteScreen(path = path, viewModel = viewModel, onBack = { if (daily == null) opened = null else onExit() }, actions = actions)
