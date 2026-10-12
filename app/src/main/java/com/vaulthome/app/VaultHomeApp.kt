@@ -38,6 +38,7 @@ class AppGraph(app: Application) {
     val models = ModelStore(app)
     val embedder = Embedder(models)
     val database = VaultIndexDatabase.create(app)
+    val tags = com.vaulthome.app.index.TagIndex(java.io.File(app.filesDir, "tags.tsv"))
     val status = IndexStatusStore(app)
     val indexer = Indexer(
         store = store,
@@ -46,6 +47,7 @@ class AppGraph(app: Application) {
         models = models,
         embedder = embedder,
         status = status,
+        tags = tags,
     )
     val searcher = Searcher(database.chunks(), embedder)
 }

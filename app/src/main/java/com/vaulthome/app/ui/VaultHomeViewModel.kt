@@ -12,6 +12,8 @@ import com.vaulthome.app.index.IndexProgress
 import com.vaulthome.app.index.IndexWorker
 import com.vaulthome.app.search.SearchHit
 import com.vaulthome.app.search.SearchFilter
+import com.vaulthome.app.search.TagChips
+import com.vaulthome.app.search.TagSuggestion
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -29,6 +31,8 @@ data class HomeState(
     val chunkCount: Int = 0,
     val message: String = "",
     val selectedTags: Set<String> = emptySet(),
+    val chips: List<com.vaulthome.app.search.TagChip> = emptyList(),
+    val rawHits: List<SearchHit> = emptyList(),
 )
 
 class VaultHomeViewModel(app: Application) : AndroidViewModel(app) {
@@ -37,13 +41,51 @@ class VaultHomeViewModel(app: Application) : AndroidViewModel(app) {
     private var searchJob: Job? = null
     private val tagCache = java.util.concurrent.ConcurrentHashMap<String, Set<String>>()
 
+    private val prefs = app.getSharedPreferences("vaulthome_ui", android.content.Context.MODE_PRIVATE)
+
+    init {
+        searchState.value = searchState.value.copy(chips = TagChips.decode(prefs.getString("chips", null)))
+    }
+
+    private fun saveChips(chips: List<com.vaulthome.app.search.TagChip>) {
+        prefs.edit().putString("chips", TagChips.encode(chips)).apply()
+    }
+
+    fun addChip(tag: String) {
+        val chips = TagChips.add(searchState.value.chips, tag)
+        val t = TagChips.normalize(tag)
+        searchState.value = searchState.value.copy(chips = chips, selectedTags = searchState.value.selectedTags + t)
+        saveChips(chips)
+        onQueryChange(searchState.value.query)
+    }
+
+    fun removeChip(tag: String) {
+        val chips = TagChips.remove(searchState.value.chips, tag)
+        searchState.value = searchState.value.copy(chips = chips, selectedTags = searchState.value.selectedTags - tag)
+        saveChips(chips)
+        onQueryChange(searchState.value.query)
+    }
+
+    /** Picker suggestions; runs off the main thread (may read tags of uncached hit notes). */
+    suspend fun tagSuggestions(filter: String): List<TagSuggestion> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val st = searchState.value
+        TagChips.rank(
+            frequencies = graph.tags.frequencies(),
+            hits = st.rawHits.map { it.path to it.score },
+            tagsOf = ::tagsOf,
+            query = st.query,
+            exclude = st.chips.map { it.tag }.toSet(),
+            filter = filter,
+        ).take(100)
+    }
+
     fun toggleTag(tag: String) {
         val cur = searchState.value.selectedTags
         searchState.value = searchState.value.copy(selectedTags = if (tag in cur) cur - tag else cur + tag)
         onQueryChange(searchState.value.query)
     }
 
-    private fun tagsOf(path: String): Set<String> = tagCache.getOrPut(path) {
+    private fun tagsOf(path: String): Set<String> = graph.tags.get(path) ?: tagCache.getOrPut(path) {
         runCatching { graph.reader.readNote(path) }.getOrNull()?.let { SearchFilter.extractTags(it) } ?: emptySet()
     }
 
@@ -87,6 +129,7 @@ class VaultHomeViewModel(app: Application) : AndroidViewModel(app) {
             if (previous != null && previous != uri) {
                 graph.database.chunks().clearChunks()
                 graph.database.chunks().clearNotes()
+                graph.tags.clear()
             }
             refresh()
         }
@@ -98,6 +141,7 @@ class VaultHomeViewModel(app: Application) : AndroidViewModel(app) {
             searchState.value = searchState.value.copy(
                 query = value,
                 hits = emptyList(),
+                rawHits = emptyList(),
                 searching = false,
                 message = if (value.isBlank()) "" else "Type ${SearchFilter.MIN_QUERY}+ characters",
             )
@@ -166,6 +210,7 @@ class VaultHomeViewModel(app: Application) : AndroidViewModel(app) {
             }.take(com.vaulthome.app.index.SearchConfig.TOP_K)
             searchState.value = searchState.value.copy(
                 hits = hits,
+                rawHits = raw,
                 searching = false,
                 message = when {
                     hits.isNotEmpty() -> ""

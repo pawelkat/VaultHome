@@ -5,7 +5,6 @@ import com.vaulthome.app.markdown.MarkdownBlocks
 /** Pure search-overlay rules (unit-tested). */
 object SearchFilter {
     const val MIN_QUERY = 3
-    val TEST_TAGS = listOf("daily", "reminder")
 
     fun shouldSearch(query: String): Boolean = query.trim().length >= MIN_QUERY
 
