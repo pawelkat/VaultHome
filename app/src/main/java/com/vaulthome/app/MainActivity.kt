@@ -14,8 +14,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.vaulthome.app.ui.NoteScreen
-import com.vaulthome.app.ui.SearchScreen
+import com.vaulthome.app.ui.HomeScreen
 import com.vaulthome.app.ui.SettingsScreen
 import com.vaulthome.app.ui.VaultHomeTheme
 import com.vaulthome.app.ui.VaultHomeViewModel
@@ -41,7 +40,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             val viewModel: VaultHomeViewModel = viewModel()
             pendingVault.value = viewModel
-            var notePath by rememberSaveable { mutableStateOf<String?>(null) }
             var showSettings by rememberSaveable { mutableStateOf(false) }
             val pickVaultTree = {
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
@@ -66,19 +64,17 @@ class MainActivity : ComponentActivity() {
                 }
             }
             VaultHomeTheme {
-                val path = notePath
                 when {
-                    path != null -> NoteScreen(path = path, viewModel = viewModel, onBack = { notePath = null })
                     showSettings -> SettingsScreen(
                         viewModel = viewModel,
                         onPickVault = pickVaultTree,
                         onBack = { showSettings = false },
                     )
-                    else -> SearchScreen(
+                    else -> HomeScreen(
                         viewModel = viewModel,
-                        onSettings = { showSettings = true },
                         onIndex = startIndex,
-                        onOpen = { notePath = it },
+                        onSettings = { showSettings = true },
+                        onExit = { finish() },
                     )
                 }
             }

@@ -53,7 +53,12 @@ private val PageInk = Color(0xFFE6E6E6)
 private val PageMuted = Color(0xFF8A8A8A)
 
 @Composable
-fun NoteScreen(path: String, viewModel: VaultHomeViewModel, onBack: () -> Unit) {
+fun NoteScreen(
+    path: String,
+    viewModel: VaultHomeViewModel,
+    onBack: () -> Unit,
+    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
+) {
     // In-app back stack for wikilink navigation; system back pops it before leaving the screen.
     var stack by rememberSaveable(path) { mutableStateOf(listOf(path)) }
     NoteContent(
@@ -61,11 +66,14 @@ fun NoteScreen(path: String, viewModel: VaultHomeViewModel, onBack: () -> Unit) 
         onBack = { if (stack.size > 1) stack = stack.dropLast(1) else onBack() },
         onOpenNote = { stack = stack + it },
         viewModel = viewModel,
+        canGoBack = stack.size > 1,
+        actions = actions,
     )
 }
 
 @Composable
-private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -> Unit, viewModel: VaultHomeViewModel) {
+private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -> Unit, viewModel: VaultHomeViewModel,
+    canGoBack: Boolean, actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -100,10 +108,11 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
             error = "Showing the indexed text. The full file could not be read."
         }
     }
-    SearchScaffold(viewModel = viewModel, onOpen = { if (it != path) onOpenNote(it) }) {
+    SearchScaffold(viewModel = viewModel, onOpen = { if (it != path) onOpenNote(it) }, actions = actions) {
+        IndexStatusLine(viewModel)
         Text(path, color = PageInk, style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onBack) { Text("Back") }
+            if (canGoBack) OutlinedButton(onClick = onBack) { Text("Back") }
             Button(
                 onClick = {
                     val uri = ObsidianLinks.vaultFileUri(path)

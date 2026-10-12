@@ -71,6 +71,7 @@ val TagPalette = listOf(Color(0xFF4A90E2), Color(0xFFF2A93B), Color(0xFF5CC489),
 fun SearchScaffold(
     viewModel: VaultHomeViewModel,
     onOpen: (String) -> Unit,
+    actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val home by viewModel.home.collectAsStateWithLifecycle()
@@ -89,12 +90,12 @@ fun SearchScaffold(
     }
     Box(Modifier.fillMaxSize().systemBarsPadding()) {
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.onGloballyPositioned { barBottom = it.size.height }) {
             OutlinedTextField(
                 value = home.query,
                 onValueChange = viewModel::onQueryChange,
-                modifier = Modifier.fillMaxWidth()
-                    .onFocusChanged { if (it.isFocused) open = true }
-                    .onGloballyPositioned { barBottom = it.size.height },
+                modifier = Modifier.weight(1f)
+                    .onFocusChanged { if (it.isFocused) open = true },
                 singleLine = true,
                 shape = RoundedCornerShape(28.dp),
                 placeholder = { Text("Search the vault") },
@@ -113,6 +114,8 @@ fun SearchScaffold(
                     }
                 },
             )
+            actions()
+            }
             content()
         }
         if (open) {
