@@ -188,7 +188,7 @@ fun RenderedNote(markdown: String, onLink: (String) -> Unit, onWikiLink: ((Strin
             }
         }
         SelectionContainer {
-            MarkdownText(parts.body, onLink = onLink, onWikiLink = onWikiLink, modifier = Modifier.fillMaxWidth())
+            MarkdownText(parts.body, onLink = onLink, onWikiLink = onWikiLink, modifier = Modifier.fillMaxWidth(), image = { VaultImage(it) })
         }
     }
 }

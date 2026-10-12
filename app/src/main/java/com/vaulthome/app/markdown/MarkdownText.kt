@@ -48,6 +48,7 @@ fun MarkdownText(
     onLink: (String) -> Unit,
     modifier: Modifier = Modifier,
     onWikiLink: ((String) -> Unit)? = null,
+    image: (@Composable (MdBlock.Image) -> Unit)? = null,
 ) {
     val blocks = remember(markdown) { MarkdownBlocks.parse(markdown) }
     val colors = MaterialTheme.colorScheme
@@ -108,27 +109,17 @@ fun MarkdownText(
                     modifier = Modifier.fillMaxWidth().background(colors.surfaceVariant).padding(8.dp),
                 )
                 MdBlock.Rule -> HorizontalDivider()
+                is MdBlock.Image -> if (image != null) image(b) else Text("\uD83D\uDDBC " + b.alt, style = type.bodySmall, color = colors.onSurfaceVariant)
                 is MdBlock.Table -> {
-                    val border = colors.outlineVariant
-                    val cols = b.header.size
-                    Column(
-                        Modifier.horizontalScroll(rememberScrollState()).border(1.dp, border)
-                            .width(IntrinsicSize.Max),
-                    ) {
-                        (listOf(b.header) + b.rows).forEachIndexed { r, row ->
-                            Row(
-                                Modifier.height(IntrinsicSize.Min).fillMaxWidth()
-                                    .background(if (r == 0) colors.surfaceVariant else Color.Unspecified),
-                            ) {
-                                for (c in 0 until cols) {
-                                    val spans = row.getOrElse(c) { emptyList() }
-                                    val cellSpans = if (r == 0) spans.map { it.copy(bold = true) } else spans
-                                    val st = type.bodySmall
+                    val cells = (listOf(b.header.map { r -> r.map { it.copy(bold = true) } }) + b.rows)
+                    Box(Modifier.horizontalScroll(rememberScrollState())) {
+                        TableGrid(rows = cells.size, cols = b.header.size, border = colors.outlineVariant, headerBg = colors.surfaceVariant) {
+                            cells.forEach { row ->
+                                for (c in 0 until b.header.size) {
                                     Text(
-                                        text(cellSpans, st), style = st, color = colors.onSurface,
+                                        text(row.getOrElse(c) { emptyList() }, type.bodySmall), style = type.bodySmall, color = colors.onSurface,
                                         textAlign = when (b.align.getOrElse(c) { -1 }) { 0 -> TextAlign.Center; 1 -> TextAlign.End; else -> TextAlign.Start },
-                                        modifier = Modifier.fillMaxHeight().widthIn(min = 48.dp, max = 260.dp)
-                                            .border(0.5.dp, border).padding(horizontal = 8.dp, vertical = 6.dp),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
                                     )
                                 }
                             }

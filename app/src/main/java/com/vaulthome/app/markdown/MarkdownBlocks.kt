@@ -13,6 +13,8 @@ sealed interface MdBlock {
     data class Quote(val text: List<MdSpan>) : MdBlock
     data class Code(val text: String) : MdBlock
     data object Rule : MdBlock
+    /** Image on its own line: Obsidian `![[a.png|300]]` or `![alt](src)`. [width] in dp, null = fit. */
+    data class Image(val target: String, val alt: String, val width: Int? = null) : MdBlock
     /** GFM pipe table. [align] per column: -1 left (default), 0 center, 1 right. Rows are padded to header width. */
     data class Table(val header: List<List<MdSpan>>, val align: List<Int>, val rows: List<List<List<MdSpan>>>) : MdBlock
 }
@@ -83,6 +85,7 @@ object MarkdownBlocks {
                     out += MdBlock.Code(code.joinToString("\n"))
                 }
                 line.isBlank() -> flush()
+                Images.parseLine(line) != null -> { flush(); out += Images.parseLine(line)!! }
                 i + 1 < lines.size && line.contains('|') && isSeparator(lines[i + 1]) &&
                     splitRow(line).size == splitRow(lines[i + 1]).size -> {
                     flush()
