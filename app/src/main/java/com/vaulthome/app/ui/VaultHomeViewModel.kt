@@ -11,6 +11,7 @@ import com.vaulthome.app.VaultHomeApp
 import com.vaulthome.app.index.IndexProgress
 import com.vaulthome.app.index.IndexWorker
 import com.vaulthome.app.search.SearchHit
+import com.vaulthome.app.search.SearchFilter
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -27,12 +28,24 @@ data class HomeState(
     val modelReady: Boolean = false,
     val chunkCount: Int = 0,
     val message: String = "",
+    val selectedTags: Set<String> = emptySet(),
 )
 
 class VaultHomeViewModel(app: Application) : AndroidViewModel(app) {
     private val graph = (app as VaultHomeApp).graph
     private val searchState = MutableStateFlow(HomeState())
     private var searchJob: Job? = null
+    private val tagCache = java.util.concurrent.ConcurrentHashMap<String, Set<String>>()
+
+    fun toggleTag(tag: String) {
+        val cur = searchState.value.selectedTags
+        searchState.value = searchState.value.copy(selectedTags = if (tag in cur) cur - tag else cur + tag)
+        onQueryChange(searchState.value.query)
+    }
+
+    private fun tagsOf(path: String): Set<String> = tagCache.getOrPut(path) {
+        runCatching { graph.reader.readNote(path) }.getOrNull()?.let { SearchFilter.extractTags(it) } ?: emptySet()
+    }
 
     val home: StateFlow<HomeState> = searchState
     val index: StateFlow<IndexProgress> = graph.status.state.stateIn(
@@ -55,6 +68,7 @@ class VaultHomeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refresh() {
+        tagCache.clear()
         viewModelScope.launch {
             val count = graph.database.chunks().chunkCount()
             searchState.value = searchState.value.copy(
@@ -80,12 +94,12 @@ class VaultHomeViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onQueryChange(value: String) {
         searchJob?.cancel()
-        if (value.isBlank()) {
+        if (!SearchFilter.shouldSearch(value)) {
             searchState.value = searchState.value.copy(
                 query = value,
                 hits = emptyList(),
                 searching = false,
-                message = "",
+                message = if (value.isBlank()) "" else "Type ${SearchFilter.MIN_QUERY}+ characters",
             )
             return
         }
@@ -145,11 +159,19 @@ class VaultHomeViewModel(app: Application) : AndroidViewModel(app) {
         }
         searchState.value = searchState.value.copy(searching = true, message = "")
         try {
-            val hits = graph.searcher.search(query)
+            val selected = searchState.value.selectedTags
+            val raw = graph.searcher.search(query, if (selected.isEmpty()) com.vaulthome.app.index.SearchConfig.TOP_K else 200)
+            val hits = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                SearchFilter.filter(raw, selected, { it.path }, ::tagsOf)
+            }.take(com.vaulthome.app.index.SearchConfig.TOP_K)
             searchState.value = searchState.value.copy(
                 hits = hits,
                 searching = false,
-                message = if (hits.isEmpty()) "No hits yet. Index the vault first." else "",
+                message = when {
+                    hits.isNotEmpty() -> ""
+                    raw.isNotEmpty() -> "No hits with tag " + selected.joinToString(" or ") { "#$it" }
+                    else -> "No hits yet. Index the vault first."
+                },
                 modelReady = true,
             )
         } catch (error: Exception) {

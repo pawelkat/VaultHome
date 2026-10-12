@@ -53,18 +53,19 @@ private val PageInk = Color(0xFFE6E6E6)
 private val PageMuted = Color(0xFF8A8A8A)
 
 @Composable
-fun NoteScreen(path: String, onBack: () -> Unit) {
+fun NoteScreen(path: String, viewModel: VaultHomeViewModel, onBack: () -> Unit) {
     // In-app back stack for wikilink navigation; system back pops it before leaving the screen.
     var stack by rememberSaveable(path) { mutableStateOf(listOf(path)) }
     NoteContent(
         path = stack.last(),
         onBack = { if (stack.size > 1) stack = stack.dropLast(1) else onBack() },
         onOpenNote = { stack = stack + it },
+        viewModel = viewModel,
     )
 }
 
 @Composable
-private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -> Unit) {
+private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -> Unit, viewModel: VaultHomeViewModel) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -99,13 +100,7 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
             error = "Showing the indexed text. The full file could not be read."
         }
     }
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .systemBarsPadding()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
+    SearchScaffold(viewModel = viewModel, onOpen = { if (it != path) onOpenNote(it) }) {
         Text(path, color = PageInk, style = MaterialTheme.typography.titleMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onBack) { Text("Back") }

@@ -68,7 +68,7 @@ class MainActivity : ComponentActivity() {
             VaultHomeTheme {
                 val path = notePath
                 when {
-                    path != null -> NoteScreen(path = path, onBack = { notePath = null })
+                    path != null -> NoteScreen(path = path, viewModel = viewModel, onBack = { notePath = null })
                     showSettings -> SettingsScreen(
                         viewModel = viewModel,
                         onPickVault = pickVaultTree,
