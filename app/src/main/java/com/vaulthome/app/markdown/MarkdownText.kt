@@ -1,6 +1,14 @@
 package com.vaulthome.app.markdown
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -100,6 +108,33 @@ fun MarkdownText(
                     modifier = Modifier.fillMaxWidth().background(colors.surfaceVariant).padding(8.dp),
                 )
                 MdBlock.Rule -> HorizontalDivider()
+                is MdBlock.Table -> {
+                    val border = colors.outlineVariant
+                    val cols = b.header.size
+                    Column(
+                        Modifier.horizontalScroll(rememberScrollState()).border(1.dp, border)
+                            .width(IntrinsicSize.Max),
+                    ) {
+                        (listOf(b.header) + b.rows).forEachIndexed { r, row ->
+                            Row(
+                                Modifier.height(IntrinsicSize.Min).fillMaxWidth()
+                                    .background(if (r == 0) colors.surfaceVariant else Color.Unspecified),
+                            ) {
+                                for (c in 0 until cols) {
+                                    val spans = row.getOrElse(c) { emptyList() }
+                                    val cellSpans = if (r == 0) spans.map { it.copy(bold = true) } else spans
+                                    val st = type.bodySmall
+                                    Text(
+                                        text(cellSpans, st), style = st, color = colors.onSurface,
+                                        textAlign = when (b.align.getOrElse(c) { -1 }) { 0 -> TextAlign.Center; 1 -> TextAlign.End; else -> TextAlign.Start },
+                                        modifier = Modifier.fillMaxHeight().widthIn(min = 48.dp, max = 260.dp)
+                                            .border(0.5.dp, border).padding(horizontal = 8.dp, vertical = 6.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

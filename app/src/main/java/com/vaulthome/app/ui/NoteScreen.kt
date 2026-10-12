@@ -3,6 +3,10 @@ package com.vaulthome.app.ui
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import com.vaulthome.app.markdown.WikiLinks
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -50,8 +54,20 @@ private val PageMuted = Color(0xFF8A8A8A)
 
 @Composable
 fun NoteScreen(path: String, onBack: () -> Unit) {
+    // In-app back stack for wikilink navigation; system back pops it before leaving the screen.
+    var stack by rememberSaveable(path) { mutableStateOf(listOf(path)) }
+    NoteContent(
+        path = stack.last(),
+        onBack = { if (stack.size > 1) stack = stack.dropLast(1) else onBack() },
+        onOpenNote = { stack = stack + it },
+    )
+}
+
+@Composable
+private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -> Unit) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val keyboard = LocalSoftwareKeyboardController.current
     var body by remember(path) { mutableStateOf("Loading the note…") }
     var error by remember(path) { mutableStateOf<String?>(null) }
@@ -138,10 +154,12 @@ fun NoteScreen(path: String, onBack: () -> Unit) {
                         }
                     },
                     onWikiLink = { target ->
-                        try {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(ObsidianLinks.vaultFileUri(target))))
-                        } catch (_: ActivityNotFoundException) {
-                            error = "Obsidian is not installed"
+                        scope.launch {
+                            val graph = (context.applicationContext as VaultHomeApp).graph
+                            val paths = withContext(Dispatchers.IO) { graph.database.chunks().allNotes().map { it.path } }
+                            val resolved = WikiLinks.resolve(target, paths)
+                            if (resolved != null && resolved != path) onOpenNote(resolved)
+                            else if (resolved == null) Toast.makeText(context, "Note not found in the index: $target", Toast.LENGTH_SHORT).show()
                         }
                     },
                 )

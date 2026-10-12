@@ -13,6 +13,8 @@ sealed interface MdBlock {
     data class Quote(val text: List<MdSpan>) : MdBlock
     data class Code(val text: String) : MdBlock
     data object Rule : MdBlock
+    /** GFM pipe table. [align] per column: -1 left (default), 0 center, 1 right. Rows are padded to header width. */
+    data class Table(val header: List<List<MdSpan>>, val align: List<Int>, val rows: List<List<List<MdSpan>>>) : MdBlock
 }
 
 data class MdSpan(
@@ -81,6 +83,24 @@ object MarkdownBlocks {
                     out += MdBlock.Code(code.joinToString("\n"))
                 }
                 line.isBlank() -> flush()
+                i + 1 < lines.size && line.contains('|') && isSeparator(lines[i + 1]) &&
+                    splitRow(line).size == splitRow(lines[i + 1]).size -> {
+                    flush()
+                    val header = splitRow(line)
+                    val align = splitRow(lines[i + 1]).map { c ->
+                        val l = c.startsWith(":"); val r = c.endsWith(":")
+                        if (l && r) 0 else if (r) 1 else -1
+                    }
+                    i += 2
+                    val rows = mutableListOf<List<List<MdSpan>>>()
+                    while (i < lines.size && lines[i].isNotBlank() && lines[i].contains('|')) {
+                        val cells = splitRow(lines[i])
+                        rows += List(header.size) { inline(cells.getOrElse(it) { "" }) }
+                        i++
+                    }
+                    out += MdBlock.Table(header.map { inline(it) }, align, rows)
+                    continue
+                }
                 rule.matches(line) -> { flush(); out += MdBlock.Rule }
                 heading.matches(line) -> {
                     flush(); val m = heading.find(line)!!
@@ -104,6 +124,38 @@ object MarkdownBlocks {
         }
         flush()
         return out
+    }
+
+    private val sepCell = Regex("^:?-{1,}:?$")
+
+    /** Splits a pipe row into trimmed cells; honours `\\|` escapes and `|` inside [[a|b]] wikilinks. */
+    fun splitRow(line: String): List<String> {
+        var t = line.trim()
+        if (t.startsWith("|")) t = t.substring(1)
+        if (t.endsWith("|") && !t.endsWith("\\|")) t = t.dropLast(1)
+        val cells = mutableListOf<String>()
+        val cur = StringBuilder()
+        var depth = 0
+        var k = 0
+        while (k < t.length) {
+            val c = t[k]
+            when {
+                c == '\\' && k + 1 < t.length && t[k + 1] == '|' -> { cur.append('|'); k++ }
+                t.startsWith("[[", k) -> { depth++; cur.append("[["); k++ }
+                t.startsWith("]]", k) && depth > 0 -> { depth--; cur.append("]]"); k++ }
+                c == '|' && depth == 0 -> { cells += cur.toString().trim(); cur.clear() }
+                else -> cur.append(c)
+            }
+            k++
+        }
+        cells += cur.toString().trim()
+        return cells
+    }
+
+    fun isSeparator(line: String): Boolean {
+        if (!line.contains('-')) return false
+        val cells = splitRow(line)
+        return cells.isNotEmpty() && cells.all { sepCell.matches(it.replace(" ", "")) } && (line.contains('|') || cells.size > 1)
     }
 
     private val token = Regex("""(!?)\[\[([^\]|]+?)(?:\|([^\]]+))?]]|(?<![\p{L}\p{N}&/#])#([\p{L}_][\p{L}\p{N}_/\-]*)|\*\*(.+?)\*\*|__(.+?)__|`([^`]+)`|\[([^\]]+)]\(([^)\s]+)\)|\*([^*\s][^*]*?)\*|(?<![\p{L}\p{N}])_([^_\s][^_]*?)_(?![\p{L}\p{N}])""")
