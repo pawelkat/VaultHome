@@ -178,11 +178,7 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
             } else {
                 RenderedNote(
                     markdown = body,
-                    onLink = { uri ->
-                        if (SafeLinks.isSafe(uri)) {
-                            try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(uri))) } catch (_: ActivityNotFoundException) {}
-                        }
-                    },
+                    onLink = { uri -> LinkOpener.open(context, uri) },
                     onWikiLink = { target ->
                         scope.launch {
                             val graph = (context.applicationContext as VaultHomeApp).graph

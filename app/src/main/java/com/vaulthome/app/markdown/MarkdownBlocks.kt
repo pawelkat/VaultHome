@@ -161,7 +161,7 @@ object MarkdownBlocks {
         return cells.isNotEmpty() && cells.all { sepCell.matches(it.replace(" ", "")) } && (line.contains('|') || cells.size > 1)
     }
 
-    private val token = Regex("""(!?)\[\[([^\]|]+?)(?:\|([^\]]+))?]]|(?<![\p{L}\p{N}&/#])#([\p{L}_][\p{L}\p{N}_/\-]*)|\*\*(.+?)\*\*|__(.+?)__|`([^`]+)`|\[([^\]]+)]\(([^)\s]+)\)|\*([^*\s][^*]*?)\*|(?<![\p{L}\p{N}])_([^_\s][^_]*?)_(?![\p{L}\p{N}])""")
+    private val token = Regex("""(!?)\[\[([^\]|]+?)(?:\|([^\]]+))?]]|(?<![\p{L}\p{N}&/#])#([\p{L}_][\p{L}\p{N}_/\-]*)|\*\*(.+?)\*\*|__(.+?)__|`([^`]+)`|\[([^\]]+)]\(<?([^)\s>]+)>?\)|<((?:https?://|www\.)[^>\s]+)>|(?<![\p{L}\p{N}/@.])((?:https?://|www\.)[^\s<>\[\]]+)|\*([^*\s][^*]*?)\*|(?<![\p{L}\p{N}])_([^_\s][^_]*?)_(?![\p{L}\p{N}])""")
 
     fun inline(text: String, bold: Boolean = false, italic: Boolean = false): List<MdSpan> {
         val out = mutableListOf<MdSpan>()
@@ -185,9 +185,16 @@ object MarkdownBlocks {
                 g[5].isNotEmpty() -> out += inline(g[5], true, italic)
                 g[6].isNotEmpty() -> out += inline(g[6], true, italic)
                 g[7].isNotEmpty() -> out += MdSpan(g[7], bold, italic, code = true)
-                g[8].isNotEmpty() -> out += inline(g[8], bold, italic).map { it.copy(url = g[9]) }
-                g[10].isNotEmpty() -> out += inline(g[10], bold, true)
-                g[11].isNotEmpty() -> out += inline(g[11], bold, true)
+                g[8].isNotEmpty() -> out += inline(g[8], bold, italic).map { it.copy(url = Links.normalize(g[9])) }
+                g[10].isNotEmpty() -> out += MdSpan(g[10], bold, italic, url = Links.normalize(g[10]))
+                g[11].isNotEmpty() -> {
+                    val u = Links.trimBare(g[11])
+                    out += MdSpan(u, bold, italic, url = Links.normalize(u))
+                    pos = m.range.first + u.length
+                    continue
+                }
+                g[12].isNotEmpty() -> out += inline(g[12], bold, true)
+                g[13].isNotEmpty() -> out += inline(g[13], bold, true)
             }
             pos = m.range.last + 1
         }

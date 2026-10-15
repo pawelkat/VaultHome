@@ -6,7 +6,7 @@ package com.vaulthome.app.markdown
  */
 object SafeLinks {
     fun isSafe(uri: String): Boolean {
-        val u = uri.trim()
+        val u = Links.normalize(uri)
         if (!u.startsWith("https://", ignoreCase = true) || u.any { it.isWhitespace() }) return false
         val host = u.substring(8).substringBefore('/').substringBefore('?').substringBefore('#')
         return host.isNotEmpty() && '@' !in host
