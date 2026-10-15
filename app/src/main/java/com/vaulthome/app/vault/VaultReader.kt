@@ -20,8 +20,21 @@ class VaultReader(
 ) {
     private var cache: List<VaultFile>? = null
 
+    private var imageCache: List<VaultFile>? = null
+
     fun invalidate() {
         cache = null
+        imageCache = null
+    }
+
+    /** All image files in the vault tree (for Obsidian attachment embeds). Cached like [scan]. */
+    fun scanImages(): List<VaultFile> {
+        imageCache?.let { return it }
+        val rootUri = store.treeUri() ?: return emptyList()
+        val root = DocumentFile.fromTreeUri(context, rootUri) ?: return emptyList()
+        val found = mutableListOf<VaultFile>()
+        walk(root, "", found) { com.vaulthome.app.markdown.Images.isImage(it) }
+        return found.also { imageCache = it }
     }
 
     fun scan(): List<VaultFile> {
@@ -29,7 +42,7 @@ class VaultReader(
         val rootUri = store.treeUri() ?: return emptyList()
         val root = DocumentFile.fromTreeUri(context, rootUri) ?: return emptyList()
         val found = mutableListOf<VaultFile>()
-        walk(root, "", found)
+        walk(root, "", found, ::isMarkdown)
         return found.also { cache = it }
     }
 
@@ -45,14 +58,14 @@ class VaultReader(
         return readText(file.uri)
     }
 
-    private fun walk(directory: DocumentFile, prefix: String, out: MutableList<VaultFile>) {
+    private fun walk(directory: DocumentFile, prefix: String, out: MutableList<VaultFile>, accept: (String) -> Boolean) {
         for (child in directory.listFiles()) {
             val name = child.name ?: continue
             if (name.startsWith(".")) continue
             val path = if (prefix.isEmpty()) name else "$prefix/$name"
             when {
-                child.isDirectory -> walk(child, path, out)
-                child.isFile && isMarkdown(name) -> out += VaultFile(path, child.lastModified(), child.uri)
+                child.isDirectory -> walk(child, path, out, accept)
+                child.isFile && accept(name) -> out += VaultFile(path, child.lastModified(), child.uri)
             }
         }
     }

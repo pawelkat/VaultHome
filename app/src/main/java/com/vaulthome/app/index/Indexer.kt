@@ -12,6 +12,7 @@ class Indexer(
     private val models: ModelStore,
     private val embedder: Embedder,
     private val status: IndexStatusStore,
+    private val tags: TagIndex,
 ) {
     suspend fun indexAll() {
         if (!store.hasReadAccess()) {
@@ -34,7 +35,9 @@ class Indexer(
         for (path in plan.removed) {
             dao.deleteChunks(path)
             dao.deleteNote(path)
+            tags.remove(path)
         }
+        tags.retain(scanned.map { it.relativePath }.toSet())
         var failures = 0
         plan.changed.forEachIndexed { index, path ->
             status.update(
@@ -53,6 +56,7 @@ class Indexer(
                     failures += 1
                     return@forEachIndexed
                 }
+                tags.put(path, com.vaulthome.app.search.SearchFilter.extractTags(text))
                 val drafts = Chunker.chunk(path, text)
                 val rows = drafts.map { draft ->
                     val vector = embedder.embed(Prefixes.chunk(draft.title, draft.text))
@@ -70,6 +74,11 @@ class Indexer(
                 failures += 1
             }
         }
+        // Backfill tags for unchanged notes indexed before the tag index existed (read only, no embedding).
+        scanned.filter { !tags.has(it.relativePath) }.forEach { f ->
+            runCatching { reader.readText(f.uri) }.getOrNull()?.let { tags.put(f.relativePath, com.vaulthome.app.search.SearchFilter.extractTags(it)) }
+        }
+        runCatching { tags.save() }
         val count = dao.chunkCount()
         val unchanged = scanned.size - plan.changed.size
         val summary = if (plan.changed.isEmpty() && plan.removed.isEmpty()) {
