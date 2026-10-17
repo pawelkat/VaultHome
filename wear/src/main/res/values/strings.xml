@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">VaultHome</string>
+    <string name="tile_label">Panel</string>
+    <string name="channel_name">Daily panel</string>
+    <string name="channel_desc">Today\'s Panel note from the vault</string>
+    <string name="no_data">Open VaultHome on the phone to sync today\'s panel</string>
+</resources>

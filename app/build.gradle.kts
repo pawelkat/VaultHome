@@ -80,6 +80,11 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.litertlm.android)
 
+    // Watch companion: parsed Panel note → Wearable Data Layer
+    implementation(project(":panel"))
+    implementation(libs.play.services.wearable)
+    implementation(libs.kotlinx.coroutines.play.services)
+
     testImplementation(libs.junit)
     // Compose UI on the JVM (Robolectric): RenderedNoteTest composes sample notes.
     testImplementation("org.robolectric:robolectric:4.17")
