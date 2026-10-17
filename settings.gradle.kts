@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "VaultHome"
 include(":app")
+include(":panel")
