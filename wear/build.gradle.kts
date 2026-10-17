@@ -3,7 +3,6 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.compose)
 }
 
 kotlin {
@@ -14,7 +13,7 @@ kotlin {
 
 android {
     namespace = "com.vaulthome.wear"
-    // Wear Compose Material3 1.6.x / Tiles 1.6.x need compileSdk >= 35; 36 matches SwimWeek's :wear.
+    // Tiles 1.6.x needs compileSdk >= 35; 36 matches SwimWeek's :wear.
     compileSdk = 36
 
     defaultConfig {
@@ -27,15 +26,24 @@ android {
         versionName = "0.1.0"
 
         ndk {
-            // Galaxy Watch 7 is 64-bit; the module has no native code, this only mirrors :app.
-            abiFilters += "arm64-v8a"
+            // Galaxy Watch 7 (SM-L310) runs a 32-bit userspace: CPU ABI armeabi-v7a.
+            // The module currently ships no native code; keep both ABIs if any library adds some.
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
         }
     }
 
     buildTypes {
+        debug {
+            // Small sideload APK: R8 + resource shrinking on the debug build too.
+            // Still debug-signed with the builder's debug keystore (same cert as :app).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
         release {
-            isMinifyEnabled = false
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
 
@@ -43,21 +51,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-
-    buildFeatures {
-        compose = true
-    }
 }
 
 dependencies {
     implementation(project(":panel"))
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.activity.compose)
-    implementation(platform(libs.androidx.compose.bom))
-    implementation(libs.androidx.compose.ui)
-    implementation(libs.androidx.compose.ui.tooling.preview)
-    debugImplementation(libs.androidx.compose.ui.tooling)
-    implementation(libs.androidx.wear.compose.material3)
     implementation(libs.androidx.wear.tiles)
     implementation(libs.androidx.wear.protolayout)
     implementation(libs.androidx.wear.protolayout.expression)
