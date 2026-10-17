@@ -29,6 +29,8 @@ class VaultHomeApp : Application() {
             getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
         graph = AppGraph(this)
+        // Watch companion: publish today's Panel note now, then re-check every 30 minutes.
+        com.vaulthome.app.wear.PanelSyncWorker.schedule(this)
     }
 }
 
@@ -50,4 +52,5 @@ class AppGraph(app: Application) {
         tags = tags,
     )
     val searcher = Searcher(database.chunks(), embedder)
+    val panelSync = com.vaulthome.app.wear.PanelSync(app, reader)
 }

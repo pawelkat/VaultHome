@@ -58,6 +58,21 @@ class VaultReader(
         return readText(file.uri)
     }
 
+    /**
+     * Reads one note by vault-relative path, walking the tree by name instead of the cached [scan],
+     * so a file that appeared after the last scan (e.g. today's `Panel/YYYY-MM-DD.md`) is found.
+     * Read-only, like everything here.
+     */
+    fun readFresh(relativePath: String): String? {
+        val rootUri = store.treeUri() ?: return null
+        var node: DocumentFile = DocumentFile.fromTreeUri(context, rootUri) ?: return null
+        for (segment in relativePath.split('/').filter { it.isNotEmpty() }) {
+            node = node.findFile(segment) ?: return null
+        }
+        if (!node.isFile) return null
+        return readText(node.uri)
+    }
+
     private fun walk(directory: DocumentFile, prefix: String, out: MutableList<VaultFile>, accept: (String) -> Boolean) {
         for (child in directory.listFiles()) {
             val name = child.name ?: continue
