@@ -68,6 +68,9 @@ fun PanelApp() {
             if (fetched.hash != panel?.hash) PanelTileService.requestUpdate(context)
             panel = fetched
         }
+        // First open after install: the listener never saw this DataItem, so notify for it now
+        // (no-op if this hash was already notified or the permission is not granted yet).
+        panel?.let { PanelNotifier.notifyIfNew(context, store, it) }
         loaded = true
     }
     MaterialTheme {
