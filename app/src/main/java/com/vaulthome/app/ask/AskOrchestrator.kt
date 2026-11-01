@@ -72,7 +72,14 @@ class AskOrchestrator(
             detail = "Nitro is off in Settings"
         } else {
             onPhase(AskPhase.CheckingNitro)
-            when (val health = nitro.health(config.nitroBaseUrl)) {
+            // Over Tailscale the first packet often has to wake the path (DERP/peer setup), so one slow /health
+            // must not end the ask: retry once, and treat a health *timeout* as "unknown" and try chat anyway.
+            var health = nitro.health(config.nitroBaseUrl)
+            if (health is Health.Down && health.reason.contains("timed out")) {
+                health = nitro.health(config.nitroBaseUrl)
+                if (health is Health.Down && health.reason.contains("timed out")) health = Health.Ok
+            }
+            when (health) {
                 Health.Ok -> {
                     onPhase(AskPhase.AskingNitro)
                     try {

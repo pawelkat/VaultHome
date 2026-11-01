@@ -72,11 +72,19 @@ class AskOrchestratorTest {
     }
 
     @Test fun nitroDownFallsBackToHits() = runBlocking {
-        val out = orchestrator(FakeNitro(health = Health.Down("Nitro timed out"))).ask("watch?")
+        val out = orchestrator(FakeNitro(health = Health.Down("Nitro refused the connection"))).ask("watch?")
         out as AskOutcome.SearchOnly
         assertEquals(NitroSkip.Down, out.nitro)
-        assertEquals("Nitro timed out", out.nitroDetail)
+        assertEquals("Nitro refused the connection", out.nitroDetail)
         assertEquals(2, out.citations.size)
+    }
+
+    @Test fun healthTimeoutRetriesThenStillAsksChat() = runBlocking {
+        val nitro = FakeNitro(health = Health.Down("Nitro health check timed out"))
+        val out = orchestrator(nitro).ask("watch?")
+        assertTrue(out is AskOutcome.Nitro)
+        assertEquals(2, nitro.healthCalls)
+        assertEquals(1, nitro.chats.size)
     }
 
     @Test fun nitroLoadingFallsBack() = runBlocking {
@@ -85,10 +93,10 @@ class AskOrchestratorTest {
     }
 
     @Test fun chatFailureAfterHealthyFallsBack() = runBlocking {
-        val out = orchestrator(FakeNitro(chatError = NitroException("Nitro timed out"))).ask("watch?")
+        val out = orchestrator(FakeNitro(chatError = NitroException("Nitro answer timed out"))).ask("watch?")
         out as AskOutcome.SearchOnly
         assertEquals(NitroSkip.ChatFailed, out.nitro)
-        assertEquals("Nitro timed out", out.nitroDetail)
+        assertEquals("Nitro answer timed out", out.nitroDetail)
     }
 
     @Test fun localEngineHookIsUsedWhenReady() = runBlocking {

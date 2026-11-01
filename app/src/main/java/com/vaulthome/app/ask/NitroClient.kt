@@ -34,8 +34,8 @@ class NitroException(message: String, cause: Throwable? = null) : IOException(me
  * server has none today, and a key must never be baked into the APK.
  */
 class NitroClient(
-    private val healthTimeoutMs: Int = 1_500,
-    private val chatConnectTimeoutMs: Int = 3_000,
+    private val healthTimeoutMs: Int = 10_000,
+    private val chatConnectTimeoutMs: Int = 15_000,
     private val chatReadTimeoutMs: Int = 300_000,
 ) : NitroGateway {
 
@@ -43,7 +43,7 @@ class NitroClient(
         val connection = try {
             open("$baseUrl/health", healthTimeoutMs, healthTimeoutMs)
         } catch (e: Exception) {
-            return@withContext Health.Down(describe(e))
+            return@withContext Health.Down(describe(e, "health check"))
         }
         try {
             val code = connection.responseCode
@@ -53,7 +53,7 @@ class NitroClient(
                 else -> Health.Down("Nitro /health returned HTTP $code")
             }
         } catch (e: Exception) {
-            Health.Down(describe(e))
+            Health.Down(describe(e, "health check"))
         } finally {
             connection.disconnect()
         }
@@ -64,7 +64,7 @@ class NitroClient(
         val connection = try {
             open("$baseUrl/v1/chat/completions", chatConnectTimeoutMs, chatReadTimeoutMs)
         } catch (e: Exception) {
-            throw NitroException(describe(e), e)
+            throw NitroException(describe(e, "answer"), e)
         }
         try {
             connection.requestMethod = "POST"
@@ -82,7 +82,7 @@ class NitroClient(
         } catch (e: NitroException) {
             throw e
         } catch (e: Exception) {
-            throw NitroException(describe(e), e)
+            throw NitroException(describe(e, "answer"), e)
         } finally {
             connection.disconnect()
         }
@@ -104,8 +104,8 @@ class NitroClient(
             ?.takeIf { it.isNotBlank() } ?: raw.take(200)
     }.getOrDefault("")
 
-    private fun describe(e: Exception): String = when (e) {
-        is SocketTimeoutException -> "Nitro timed out"
+    private fun describe(e: Exception, stage: String): String = when (e) {
+        is SocketTimeoutException -> "Nitro $stage timed out"
         is java.net.ConnectException -> "Nitro refused the connection"
         is java.net.UnknownHostException -> "Nitro host not found"
         else -> {

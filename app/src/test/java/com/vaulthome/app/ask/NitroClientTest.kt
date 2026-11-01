@@ -56,7 +56,7 @@ class NitroClientTest {
         val started = System.nanoTime()
         val h = client.health(base)
         val ms = (System.nanoTime() - started) / 1_000_000
-        assertEquals(Health.Down("Nitro timed out"), h)
+        assertEquals(Health.Down("Nitro health check timed out"), h)
         assertTrue("took $ms ms", ms < 1_500)
     }
 
@@ -113,7 +113,7 @@ class NitroClientTest {
             client.chat(base, listOf(ChatMessage("user", "x")))
             fail("expected NitroException")
         } catch (e: NitroException) {
-            assertEquals("Nitro timed out", e.message)
+            assertEquals("Nitro answer timed out", e.message)
         }
     }
 
