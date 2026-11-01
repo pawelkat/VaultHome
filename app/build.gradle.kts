@@ -81,6 +81,9 @@ dependencies {
     implementation(libs.litertlm.android)
 
     testImplementation(libs.junit)
+    // Real org.json on the JVM (android.jar stubs throw) + MockWebServer standing in for Nitro llama-server.
+    testImplementation("org.json:json:20240303")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     // Compose UI on the JVM (Robolectric): RenderedNoteTest composes sample notes.
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation(platform(libs.androidx.compose.bom))

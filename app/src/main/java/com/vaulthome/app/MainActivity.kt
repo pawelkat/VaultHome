@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
             val viewModel: VaultHomeViewModel = viewModel()
             pendingVault.value = viewModel
             var showSettings by rememberSaveable { mutableStateOf(false) }
+            val askViewModel: com.vaulthome.app.ask.AskViewModel = viewModel()
             val pickVaultTree = {
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                     addFlags(
@@ -71,6 +72,7 @@ class MainActivity : ComponentActivity() {
                         viewModel = viewModel,
                         onPickVault = pickVaultTree,
                         onBack = { showSettings = false },
+                        askViewModel = askViewModel,
                     )
                     else -> holder.SaveableStateProvider("home") {
                         HomeScreen(

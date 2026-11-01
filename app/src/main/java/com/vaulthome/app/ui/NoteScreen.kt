@@ -20,13 +20,23 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -44,13 +54,14 @@ import com.vaulthome.app.markdown.SafeLinks
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private val PageInk = Color(0xFFE6E6E6)
 private val PageMuted = Color(0xFF8A8A8A)
+private val IconOn = Color(0xFFE6E6E6)
+private val IconOff = Color(0xFF808080)
 
 @Composable
 fun NoteScreen(
@@ -66,14 +77,20 @@ fun NoteScreen(
     // Settings round-trips and process death; popped entries are dropped.
     val holder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val entryKey = "${stack.size - 1}:${stack.last()}"
+    // Ask answer cache: back from a source opened from an Ask answer lands on that answer again.
+    val askVm: com.vaulthome.app.ask.AskViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val ask by askVm.state.collectAsStateWithLifecycle()
     holder.SaveableStateProvider(entryKey) { NoteContent(
         path = stack.last(),
         onBack = {
-            if (stack.size > 1) { holder.removeState(entryKey); stack = NoteStack.pop(stack) } else onBack()
+            // Restores the answer when leaving the source note; if the source was the bottom note, stay on it
+            // (the answer panel is shown over it) instead of leaving the screen.
+            val restored = askVm.returnFrom(stack.last())
+            if (stack.size > 1) { holder.removeState(entryKey); stack = NoteStack.pop(stack) } else if (!restored) onBack()
         },
         onOpenNote = { stack = NoteStack.push(stack, it) },
         viewModel = viewModel,
-        canGoBack = stack.size > 1,
+        canGoBack = stack.size > 1 || com.vaulthome.app.ask.AskCache.canReturnFrom(ask, stack.last()),
         actions = actions,
         topBar = topBar,
     ) }
@@ -137,26 +154,27 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
     SearchScaffold(viewModel = viewModel, onOpen = { if (it != path) onOpenNote(it) }, actions = actions, topBar = topBar) {
         IndexStatusLine(viewModel)
         Text(path, color = PageInk, style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (canGoBack) OutlinedButton(onClick = onBack) { Text("Back") }
-            Button(
-                onClick = {
-                    val uri = ObsidianLinks.vaultFileUri(path)
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
-                    try {
-                        context.startActivity(intent)
-                    } catch (_: ActivityNotFoundException) {
-                        error = "Obsidian is not installed"
-                    }
-                },
-            ) { Text("Open in Obsidian") }
-        }
         if (error != null) {
             Text(error!!, color = MaterialTheme.colorScheme.error)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !raw, onClick = { raw = false }, label = { Text("Rendered") })
-            FilterChip(selected = raw, onClick = { raw = true }, label = { Text("Raw") })
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (canGoBack) BackArrow(onBack)
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = { raw = false }) {
+                Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Show rendered",
+                    tint = if (!raw) IconOn else IconOff, modifier = Modifier.size(20.dp))
+            }
+            IconButton(onClick = { raw = true }, modifier = Modifier.semantics { contentDescription = "Show raw" }) {
+                Text("</>", color = if (raw) IconOn else IconOff, fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelMedium)
+            }
+            IconButton(onClick = {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(ObsidianLinks.vaultFileUri(path)))
+                try { context.startActivity(intent) } catch (_: ActivityNotFoundException) { error = "Obsidian is not installed" }
+            }) {
+                Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = "Open in Obsidian",
+                    tint = IconOff, modifier = Modifier.size(20.dp))
+            }
         }
         Box(
             modifier = Modifier
@@ -178,16 +196,8 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
             } else {
                 RenderedNote(
                     markdown = body,
-                    onLink = { uri -> LinkOpener.open(context, uri) },
-                    onWikiLink = { target ->
-                        scope.launch {
-                            val graph = (context.applicationContext as VaultHomeApp).graph
-                            val paths = withContext(Dispatchers.IO) { graph.database.chunks().allNotes().map { it.path } }
-                            val resolved = WikiLinks.resolve(target, paths)
-                            if (resolved != null && resolved != path) onOpenNote(resolved)
-                            else if (resolved == null) Toast.makeText(context, "Note not found in the index: $target", Toast.LENGTH_SHORT).show()
-                        }
-                    },
+                    onLink = { uri -> VaultLinkOpener.onLink(context, scope, uri, current = path, onOpenNote = onOpenNote) },
+                    onWikiLink = { target -> VaultLinkOpener.onWikiLink(context, scope, target, current = path, onOpenNote = onOpenNote) },
                 )
             }
         }
@@ -216,5 +226,16 @@ fun RenderedNote(markdown: String, onLink: (String) -> Unit, onWikiLink: ((Strin
         SelectionContainer {
             MarkdownText(parts.body, onLink = onLink, onWikiLink = onWikiLink, modifier = Modifier.fillMaxWidth(), image = { VaultImage(it) })
         }
+    }
+}
+
+/** Navigation back: a small arrow only (no text button). */
+@Composable
+fun BackArrow(onBack: () -> Unit, modifier: Modifier = Modifier) {
+    IconButton(onClick = onBack, modifier = modifier.size(36.dp)) {
+        Icon(
+            androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back",
+            tint = Color(0xFFB0B0B0), modifier = Modifier.size(22.dp),
+        )
     }
 }
