@@ -8,7 +8,8 @@ import kotlinx.coroutines.flow.StateFlow
  * Ask settings. No API key lives here (or anywhere in the APK): Nitro is reached on the home LAN or over
  * Tailscale HTTPS.
  *
- * @property askEnabled feature flag for the Ask surface (top-bar icon). Off = app behaves like before.
+ * @property askEnabled feature flag for Ask: shows the Ask ↔ Search switch above the search field. Off = Search only.
+ * @property askMode last chosen mode of that switch (true = Ask), persisted across restarts.
  * @property nitroEnabled try the Nitro before the on-device path.
  * @property nitroBaseUrl root of VaultSearch's **chat proxy** on Nitro (`contrib/chat_proxy.py`), which injects
  *   `System/Nitro5 Qwen.md` + the date block and runs the `vault_search` tool loop server-side, then returns a
@@ -22,7 +23,14 @@ data class AskSettings(
     val nitroEnabled: Boolean = true,
     val nitroBaseUrl: String = DEFAULT_NITRO_URL,
     val groundNitro: Boolean = false,
+    val askMode: Boolean = false,
 ) {
+    /** The search bar is in Ask mode only when Ask is enabled and the switch is on Ask. */
+    val askActive: Boolean get() = askEnabled && askMode
+
+    /** Where an Ask is sent first, for the remote/local badge next to the switch. */
+    val target: AskTarget get() = if (nitroEnabled) AskTarget.Remote else AskTarget.Local
+
     companion object {
         /** Chat proxy on the home LAN (llama-server itself stays on 8080 behind it). */
         const val DEFAULT_NITRO_URL = "http://192.168.1.18:8082"
@@ -49,6 +57,9 @@ data class AskSettings(
     }
 }
 
+/** Where Ask goes first: Nitro over the network, or the phone itself. */
+enum class AskTarget { Remote, Local }
+
 class AskSettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("vaulthome_ask", Context.MODE_PRIVATE)
     private val flow = MutableStateFlow(load())
@@ -59,6 +70,7 @@ class AskSettingsStore(context: Context) {
         nitroEnabled = prefs.getBoolean(KEY_NITRO, true),
         nitroBaseUrl = AskSettings.migrateStoredUrl(prefs.getString(KEY_URL, null)),
         groundNitro = prefs.getBoolean(KEY_GROUND, false),
+        askMode = prefs.getBoolean(KEY_MODE, false),
     )
 
     fun update(transform: (AskSettings) -> AskSettings) {
@@ -68,6 +80,7 @@ class AskSettingsStore(context: Context) {
             .putBoolean(KEY_NITRO, next.nitroEnabled)
             .putString(KEY_URL, next.nitroBaseUrl)
             .putBoolean(KEY_GROUND, next.groundNitro)
+            .putBoolean(KEY_MODE, next.askMode)
             .apply()
         flow.value = next
     }
@@ -77,5 +90,6 @@ class AskSettingsStore(context: Context) {
         const val KEY_NITRO = "nitro_enabled"
         const val KEY_URL = "nitro_base_url"
         const val KEY_GROUND = "nitro_ground_with_hits"
+        const val KEY_MODE = "search_bar_ask_mode"
     }
 }

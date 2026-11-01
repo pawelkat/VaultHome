@@ -41,6 +41,18 @@ class AskViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Drops the shown answer (the home body goes back to the note); keeps the question text. */
+    fun dismissAnswer() {
+        job?.cancel()
+        flow.value = flow.value.copy(phase = null, outcome = null)
+    }
+
+    /** Clear button in Ask mode: empties the field and the answer. */
+    fun clear() {
+        job?.cancel()
+        flow.value = AskUiState()
+    }
+
     fun cancel() {
         job?.cancel()
         flow.value = flow.value.copy(phase = null)

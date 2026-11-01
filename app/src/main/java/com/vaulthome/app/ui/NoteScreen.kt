@@ -23,6 +23,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.foundation.layout.Spacer
@@ -31,7 +32,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -151,7 +151,7 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
             Text(error!!, color = MaterialTheme.colorScheme.error)
         }
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            if (canGoBack) OutlinedButton(onClick = onBack) { Text("Back", color = PageInk) }
+            if (canGoBack) BackArrow(onBack)
             Spacer(Modifier.weight(1f))
             IconButton(onClick = { raw = false }) {
                 Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Show rendered",
@@ -227,5 +227,16 @@ fun RenderedNote(markdown: String, onLink: (String) -> Unit, onWikiLink: ((Strin
         SelectionContainer {
             MarkdownText(parts.body, onLink = onLink, onWikiLink = onWikiLink, modifier = Modifier.fillMaxWidth(), image = { VaultImage(it) })
         }
+    }
+}
+
+/** Navigation back: a small arrow only (no text button). */
+@Composable
+fun BackArrow(onBack: () -> Unit, modifier: Modifier = Modifier) {
+    IconButton(onClick = onBack, modifier = modifier.size(36.dp)) {
+        Icon(
+            androidx.compose.material.icons.Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back",
+            tint = Color(0xFFB0B0B0), modifier = Modifier.size(22.dp),
+        )
     }
 }

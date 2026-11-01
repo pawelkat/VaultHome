@@ -30,4 +30,12 @@ class AskSettingsTest {
         assertEquals("http://nitro.lan:8080", AskSettings.migrateStoredUrl("http://nitro.lan:8080"))
         assertEquals(AskSettings.TAILSCALE_NITRO_URL, AskSettings.migrateStoredUrl(AskSettings.TAILSCALE_NITRO_URL))
     }
+
+    @Test fun askModeNeedsAskEnabled() {
+        assertEquals(false, AskSettings().askActive)
+        assertEquals(true, AskSettings(askMode = true).askActive)
+        assertEquals(false, AskSettings(askEnabled = false, askMode = true).askActive)
+        assertEquals(AskTarget.Remote, AskSettings().target)
+        assertEquals(AskTarget.Local, AskSettings(nitroEnabled = false).target)
+    }
 }

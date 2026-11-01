@@ -59,8 +59,10 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Settings", style = MaterialTheme.typography.titleLarge, color = Ink)
-        OutlinedButton(onClick = onBack) { Text("Back") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            BackArrow(onBack)
+            Text("Settings", style = MaterialTheme.typography.titleLarge, color = Ink, modifier = Modifier.padding(start = 4.dp))
+        }
         if (busy) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
@@ -104,7 +106,7 @@ private fun AskSettingsSection(askViewModel: com.vaulthome.app.ask.AskViewModel)
     val health by askViewModel.healthText.collectAsStateWithLifecycle()
     var url by remember { mutableStateOf(ask.nitroBaseUrl) }
     Text("Ask", style = MaterialTheme.typography.titleMedium, color = Ink)
-    SwitchRow("Show Ask", ask.askEnabled) { v -> store.update { it.copy(askEnabled = v) } }
+    SwitchRow("Show Ask ↔ Search switch", ask.askEnabled) { v -> store.update { it.copy(askEnabled = v) } }
     SwitchRow("Use Nitro first", ask.nitroEnabled) { v -> store.update { it.copy(nitroEnabled = v) } }
     OutlinedTextField(
         value = url,
