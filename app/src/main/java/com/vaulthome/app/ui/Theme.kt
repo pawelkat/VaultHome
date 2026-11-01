@@ -11,8 +11,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
 private val Black = Color(0xFF000000)
-private val Ink = Color(0xFFE6E6E6)
-private val Muted = Color(0xFF8A8A8A)
+internal val Ink = Color(0xFFE6E6E6)
+internal val Muted = Color(0xFF8A8A8A)
 
 private val Scheme = darkColorScheme(
     primary = Color(0xFFC8C8C8),

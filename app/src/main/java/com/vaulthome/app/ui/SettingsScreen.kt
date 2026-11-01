@@ -59,12 +59,12 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Settings", style = MaterialTheme.typography.titleLarge)
+        Text("Settings", style = MaterialTheme.typography.titleLarge, color = Ink)
         OutlinedButton(onClick = onBack) { Text("Back") }
         if (busy) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
-        Text("Vault", style = MaterialTheme.typography.titleMedium)
+        Text("Vault", style = MaterialTheme.typography.titleMedium, color = Ink)
         Text(
             text = if (home.vaultGranted) "Read access is granted" else "The vault is not granted",
             color = Color(0xFF8A8A8A),
@@ -74,7 +74,7 @@ fun SettingsScreen(
         } else {
             Button(onClick = onPickVault) { Text("Grant vault") }
         }
-        Text("Open YouTube links with", style = MaterialTheme.typography.titleMedium)
+        Text("Open YouTube links with", style = MaterialTheme.typography.titleMedium, color = Ink)
         val ctx = LocalContext.current
         var yt by remember { mutableStateOf(LinkOpener.youTubeApp(ctx)) }
         YouTubeApp.entries.forEach { opt ->
@@ -83,10 +83,10 @@ fun SettingsScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RadioButton(selected = yt == opt, onClick = null)
-                Text(opt.label, modifier = Modifier.padding(start = 8.dp))
+                Text(opt.label, color = Ink, modifier = Modifier.padding(start = 8.dp))
             }
         }
-        Text("Model", style = MaterialTheme.typography.titleMedium)
+        Text("Model", style = MaterialTheme.typography.titleMedium, color = Ink)
         if (!home.modelReady) {
             Button(onClick = viewModel::downloadModel) { Text("Download model") }
         } else {
@@ -103,13 +103,13 @@ private fun AskSettingsSection(askViewModel: com.vaulthome.app.ask.AskViewModel)
     val ask by store.state.collectAsStateWithLifecycle()
     val health by askViewModel.healthText.collectAsStateWithLifecycle()
     var url by remember { mutableStateOf(ask.nitroBaseUrl) }
-    Text("Ask", style = MaterialTheme.typography.titleMedium)
+    Text("Ask", style = MaterialTheme.typography.titleMedium, color = Ink)
     SwitchRow("Show Ask", ask.askEnabled) { v -> store.update { it.copy(askEnabled = v) } }
     SwitchRow("Use Nitro first", ask.nitroEnabled) { v -> store.update { it.copy(nitroEnabled = v) } }
     OutlinedTextField(
         value = url,
         onValueChange = { url = it },
-        label = { Text("Nitro chat proxy URL") },
+        label = { Text("Nitro chat proxy URL", color = Muted) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
@@ -143,7 +143,7 @@ private fun AskSettingsSection(askViewModel: com.vaulthome.app.ask.AskViewModel)
 @Composable
 private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, modifier = Modifier.weight(1f))
+        Text(label, color = Ink, modifier = Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onChange)
     }
 }
