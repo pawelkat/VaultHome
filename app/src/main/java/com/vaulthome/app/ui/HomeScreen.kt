@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -37,7 +38,7 @@ import java.time.LocalDate
 
 /** Landing page: the latest daily note in the note viewer (search overlay on top), or an empty state. */
 @Composable
-fun HomeScreen(viewModel: VaultHomeViewModel, onIndex: () -> Unit, onSettings: () -> Unit, onExit: () -> Unit) {
+fun HomeScreen(viewModel: VaultHomeViewModel, onIndex: () -> Unit, onSettings: () -> Unit, onExit: () -> Unit, onAsk: (() -> Unit)? = null) {
     val context = LocalContext.current
     val index by viewModel.index.collectAsStateWithLifecycle()
     // Saveable so the first composition after Settings / recreation / process death goes straight to the note.
@@ -55,7 +56,7 @@ fun HomeScreen(viewModel: VaultHomeViewModel, onIndex: () -> Unit, onSettings: (
         loading = false
     }
     val actions: @Composable RowScope.() -> Unit = { ReindexAction(viewModel, onIndex) }
-    val topBar: @Composable RowScope.() -> Unit = { SettingsAction(onSettings) }
+    val topBar: @Composable RowScope.() -> Unit = { if (onAsk != null) AskAction(onAsk); SettingsAction(onSettings) }
     var opened by rememberSaveable { mutableStateOf<String?>(null) }
     val path = daily ?: opened
     if (path != null) {
@@ -82,6 +83,13 @@ fun ReindexAction(viewModel: VaultHomeViewModel, onIndex: () -> Unit) {
     IconButton(onClick = onIndex, enabled = !busy) {
         if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
         else Icon(Icons.Filled.Refresh, contentDescription = "Reindex vault", tint = Color(0xFFB0B0B0))
+    }
+}
+
+@Composable
+fun AskAction(onAsk: () -> Unit) {
+    IconButton(onClick = onAsk, modifier = Modifier.size(32.dp)) {
+        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Ask the vault", tint = Color(0xFFB0B0B0), modifier = Modifier.size(20.dp))
     }
 }
 

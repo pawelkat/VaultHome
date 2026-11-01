@@ -5,6 +5,9 @@ object SearchConfig {
     const val MAX_CHUNK_CHARS = 2048
     const val MAX_INPUT_TOKENS = 1024
     const val TOP_K = 12
+
+    /** Hits used as citations (and, in PR-B, prompt context) on the Ask path. */
+    const val ASK_TOP_K = 6
     const val MODEL_FILE = "embeddinggemma-2-text-270m.litertlm"
     const val MODEL_URL =
         "https://huggingface.co/litert-community/embeddinggemma-2-text-270m-litert-lm/resolve/main/embeddinggemma-2-text-270m.litertlm"

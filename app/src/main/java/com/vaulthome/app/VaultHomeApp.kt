@@ -50,4 +50,16 @@ class AppGraph(app: Application) {
         tags = tags,
     )
     val searcher = Searcher(database.chunks(), embedder)
+    val askSettings = com.vaulthome.app.ask.AskSettingsStore(app)
+    val nitro = com.vaulthome.app.ask.NitroClient()
+    val askOrchestrator = com.vaulthome.app.ask.AskOrchestrator(
+        nitro = nitro,
+        settings = { askSettings.state.value },
+        search = { query ->
+            check(models.isReady()) { "Download the embedding model in Settings to see sources" }
+            searcher.search(query, com.vaulthome.app.index.SearchConfig.ASK_TOP_K * 2)
+        },
+        // PR-B: replace with the Gemma 4 E2B LiteRT-LM engine.
+        local = com.vaulthome.app.ask.LocalAnswerEngineStub,
+    )
 }

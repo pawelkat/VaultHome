@@ -8,6 +8,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -41,6 +42,9 @@ class MainActivity : ComponentActivity() {
             val viewModel: VaultHomeViewModel = viewModel()
             pendingVault.value = viewModel
             var showSettings by rememberSaveable { mutableStateOf(false) }
+            var showAsk by rememberSaveable { mutableStateOf(false) }
+            val askViewModel: com.vaulthome.app.ask.AskViewModel = viewModel()
+            val askSettings by (application as VaultHomeApp).graph.askSettings.state.collectAsState()
             val pickVaultTree = {
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                     addFlags(
@@ -71,6 +75,11 @@ class MainActivity : ComponentActivity() {
                         viewModel = viewModel,
                         onPickVault = pickVaultTree,
                         onBack = { showSettings = false },
+                        askViewModel = askViewModel,
+                    )
+                    showAsk && askSettings.askEnabled -> com.vaulthome.app.ask.AskScreen(
+                        viewModel = askViewModel,
+                        onBack = { showAsk = false },
                     )
                     else -> holder.SaveableStateProvider("home") {
                         HomeScreen(
@@ -78,6 +87,7 @@ class MainActivity : ComponentActivity() {
                             onIndex = startIndex,
                             onSettings = { showSettings = true },
                             onExit = { finish() },
+                            onAsk = if (askSettings.askEnabled) ({ showAsk = true }) else null,
                         )
                     }
                 }
