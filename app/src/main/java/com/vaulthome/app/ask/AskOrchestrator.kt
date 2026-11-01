@@ -74,10 +74,9 @@ class AskOrchestrator(
             onPhase(AskPhase.CheckingNitro)
             when (val health = nitro.health(config.nitroBaseUrl)) {
                 Health.Ok -> {
-                    val context = if (config.groundNitro) hitsJob.await().citations else emptyList()
                     onPhase(AskPhase.AskingNitro)
                     try {
-                        val reply = nitro.chat(config.nitroBaseUrl, NitroPrompt.messages(q, context))
+                        val reply = nitro.chat(config.nitroBaseUrl, NitroPrompt.messages(q))
                         val hits = hitsJob.await()
                         return@coroutineScope AskOutcome.Nitro(reply.content, reply.model, hits.citations, hits.error)
                     } catch (e: CancellationException) {
@@ -129,29 +128,11 @@ class AskOrchestrator(
 }
 
 /**
- * Light client system prompt. The Nitro chat proxy puts its own `System/Nitro5 Qwen.md` prompt first and appends
- * this one after it. Local hits are only attached when grounding is on.
+ * Thin client of Nitro's chat proxy: send only the question. The proxy injects `System/Nitro5 Qwen.md`, the live
+ * Europe/Zurich date block ("Yesterday = …") and the `vault_search` tool, then runs the tool loop. A client system
+ * prompt or stuffed local excerpts would compete with that (local EmbeddingGemma hits cannot resolve "yesterday",
+ * so Qwen answered from whatever old Daily notes matched), so none are sent. Local hits stay citations only.
  */
 object NitroPrompt {
-    const val SYSTEM =
-        "You answer questions about Pawel's Obsidian vault (notes, projects, devices, people). " +
-            "Be brief and concrete. Use the vault_search tool when it is available before saying you do not know. " +
-            "If the vault does not have it, say so. Do not invent note paths."
-
-    fun messages(question: String, context: List<Citation>): List<ChatMessage> {
-        val user = if (context.isEmpty()) {
-            question
-        } else {
-            buildString {
-                append("Vault excerpts (path › heading):\n")
-                context.forEachIndexed { i, c ->
-                    append("[${i + 1}] ").append(c.path)
-                    if (c.heading.isNotBlank()) append(" › ").append(c.heading)
-                    append("\n").append(c.snippet).append("\n\n")
-                }
-                append("Question: ").append(question)
-            }
-        }
-        return listOf(ChatMessage("system", SYSTEM), ChatMessage("user", user))
-    }
+    fun messages(question: String): List<ChatMessage> = listOf(ChatMessage("user", question))
 }

@@ -70,7 +70,7 @@ class NitroClientTest {
         server.enqueue(
             json(200, """{"model":"qwen3.5-4b","choices":[{"index":0,"message":{"role":"assistant","content":"<think>hmm</think>\n PR #2 is open."}}]}"""),
         )
-        val reply = client.chat(base, NitroPrompt.messages("What is open for VaultHome?", emptyList()))
+        val reply = client.chat(base, NitroPrompt.messages("What is open for VaultHome?"))
         assertEquals("PR #2 is open.", reply.content)
         assertEquals("qwen3.5-4b", reply.model)
         val req = server.takeRequest()
@@ -79,8 +79,10 @@ class NitroClientTest {
         val body = JSONObject(req.body.readUtf8())
         assertFalse(body.getBoolean("stream"))
         val messages = body.getJSONArray("messages")
-        assertEquals("system", messages.getJSONObject(0).getString("role"))
-        assertEquals("What is open for VaultHome?", messages.getJSONObject(1).getString("content"))
+        assertEquals(1, messages.length())
+        assertEquals("user", messages.getJSONObject(0).getString("role"))
+        assertEquals("What is open for VaultHome?", messages.getJSONObject(0).getString("content"))
+        assertFalse(body.has("tools")) // the proxy adds vault_search only when the client sends no tools
         // No API key header ever.
         assertNull(req.getHeader("Authorization"))
     }

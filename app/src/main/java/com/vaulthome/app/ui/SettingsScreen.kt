@@ -135,7 +135,6 @@ private fun AskSettingsSection(askViewModel: com.vaulthome.app.ask.AskViewModel)
         color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
     )
     health?.let { Text(it, color = Color(0xFF8A8A8A)) }
-    SwitchRow("Send local hits to Nitro as context", ask.groundNitro) { v -> store.update { it.copy(groundNitro = v) } }
     Text(
         "Plain http works only to 192.168.1.18 and localhost; Tailscale uses HTTPS. No API key is stored. On-device answers (Gemma 4 E2B) come in a later build; until then Ask falls back to matching notes.",
         color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,

@@ -9,7 +9,6 @@ class AskSettingsTest {
         assertEquals("http://192.168.1.18:8082", s.nitroBaseUrl)
         assertEquals(true, s.nitroEnabled)
         assertEquals(true, s.askEnabled)
-        assertEquals(false, s.groundNitro)
     }
 
     @Test fun normalize() {

@@ -48,15 +48,16 @@ class AskOrchestratorTest {
         assertEquals(listOf("Notes/VaultHome Watch.md", "Notes/VaultHome.md"), out.citations.map { it.path })
         assertEquals("obsidian://open?vault=Vault&file=Notes/VaultHome%20Watch", out.citations[0].obsidianUri)
         assertEquals(listOf(AskPhase.CheckingNitro, AskPhase.AskingNitro), phases)
-        // Citations only: the question goes to Nitro without the local hits.
-        assertEquals("watch?", nitro.chats.single()[1].content)
+        // Thin client: only the user question; the chat proxy adds the system prompt, date block and tools.
+        assertEquals(listOf(ChatMessage("user", "watch?")), nitro.chats.single())
     }
 
-    @Test fun groundingSendsHitsAsContext() = runBlocking {
+    @Test fun nitroNeverGetsClientSystemPromptOrLocalExcerpts() = runBlocking {
         val nitro = FakeNitro()
-        orchestrator(nitro, AskSettings(groundNitro = true)).ask("watch?")
-        val user = nitro.chats.single()[1].content
-        assertTrue(user, user.contains("Notes/VaultHome Watch.md › Open loops") && user.endsWith("Question: watch?"))
+        orchestrator(nitro).ask("what I did yesterday?")
+        val sent = nitro.chats.single()
+        assertTrue(sent.none { it.role == "system" })
+        assertTrue(sent.none { "Vault excerpts" in it.content || "Notes/VaultHome" in it.content })
     }
 
     @Test fun nitroDisabledSkipsHealthAndFallsBackToHits() = runBlocking {

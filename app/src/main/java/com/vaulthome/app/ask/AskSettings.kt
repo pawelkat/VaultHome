@@ -15,14 +15,11 @@ import kotlinx.coroutines.flow.StateFlow
  *   `System/Nitro5 Qwen.md` + the date block and runs the `vault_search` tool loop server-side, then returns a
  *   plain chat completion. Home Wi‑Fi: [DEFAULT_NITRO_URL] (`:8082`); Tailscale: [TAILSCALE_NITRO_URL]. Raw
  *   llama-server on `:8080` answers without vault tools, so Ask must not point there.
- * @property groundNitro also send the local EmbeddingGemma hits to Nitro as context. Off by default:
- *   in PR-A local hits are citations only (see the PR description).
  */
 data class AskSettings(
     val askEnabled: Boolean = true,
     val nitroEnabled: Boolean = true,
     val nitroBaseUrl: String = DEFAULT_NITRO_URL,
-    val groundNitro: Boolean = false,
     val askMode: Boolean = false,
 ) {
     /** The search bar is in Ask mode only when Ask is enabled and the switch is on Ask. */
@@ -77,7 +74,6 @@ class AskSettingsStore(context: Context) {
         askEnabled = prefs.getBoolean(KEY_ASK, true),
         nitroEnabled = prefs.getBoolean(KEY_NITRO, true),
         nitroBaseUrl = AskSettings.migrateStoredUrl(prefs.getString(KEY_URL, null)),
-        groundNitro = prefs.getBoolean(KEY_GROUND, false),
         askMode = prefs.getBoolean(KEY_MODE, false),
     )
 
@@ -87,7 +83,7 @@ class AskSettingsStore(context: Context) {
             .putBoolean(KEY_ASK, next.askEnabled)
             .putBoolean(KEY_NITRO, next.nitroEnabled)
             .putString(KEY_URL, next.nitroBaseUrl)
-            .putBoolean(KEY_GROUND, next.groundNitro)
+            .remove(KEY_GROUND) // retired: Ask no longer sends local hits to Nitro
             .putBoolean(KEY_MODE, next.askMode)
             .apply()
         flow.value = next
