@@ -65,6 +65,12 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import com.vaulthome.app.ask.AskBadge
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vaulthome.app.VaultHomeApp
@@ -81,7 +87,7 @@ val TagPalette = listOf(Color(0xFF4A90E2), Color(0xFFF2A93B), Color(0xFF5CC489),
  * below it: tag chips (persisted; journal / reminder by default, '+' adds from the tag index, 'x' removes) and live results (>= 3 chars, 250 ms debounce in the VM).
  * Tapping a result calls [onOpen] and closes the overlay; back, tapping outside or hiding the IME closes it.
  *
- * When Ask is enabled in Settings, an Ask ↔ Search switch sits above the field (mode persisted in AskSettings).
+ * When Ask is enabled in Settings, a compact Search ↔ Ask switch sits in the top bar left of Settings (mode persisted in AskSettings).
  * In Ask mode the same field takes a question (IME Send); the answer replaces [content] with a markdown panel
  * rendered by [RenderedNote] until it is dismissed (×, back, clear, opening a source) or the mode goes back to Search.
  */
@@ -122,11 +128,17 @@ fun SearchScaffold(
     val submitAsk = { if (!askBusy && ask.question.isNotBlank()) { askVm.ask(); focusManager.clearFocus(force = true) } }
     Box(Modifier.fillMaxSize().systemBarsPadding()) {
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (topBar != null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically, content = topBar)
-            if (askSettings.askEnabled) {
-                AskSearchSwitch(askMode = askMode, target = askSettings.target) { mode ->
-                    close()
-                    askStore.update { it.copy(askMode = mode) }
+            // Top bar: [remote/local] [Search ◯ Ask] [Settings] — the compact switch sits left of Settings so the
+            // markdown panel keeps the vertical space.
+            if (topBar != null || askSettings.askEnabled) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) {
+                    if (askSettings.askEnabled) {
+                        CompactAskSwitch(askMode = askMode, target = askSettings.target) { mode ->
+                            close()
+                            askStore.update { it.copy(askMode = mode) }
+                        }
+                    }
+                    if (topBar != null) topBar()
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.onGloballyPositioned { barBottom = (it.positionInParent().y + it.size.height).toInt() }) {
@@ -291,37 +303,43 @@ private val SwitchMuted = Color(0xFF8A8A8A)
 private val RemoteInk = Color(0xFF9BC4F0)
 private val LocalInk = Color(0xFF5CC489)
 
-/** "Search [switch] Ask" plus, in Ask mode, where the question goes (remote Nitro / local phone). */
+/**
+ * Compact "Search ◯ Ask" switch for the top bar (left of Settings). In Ask mode a small badge before it says where
+ * the question goes (remote Nitro / local phone).
+ */
 @Composable
-private fun AskSearchSwitch(askMode: Boolean, target: AskTarget, onMode: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-            "Search", color = if (askMode) SwitchMuted else SwitchInk, style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.clickable { onMode(false) }.padding(horizontal = 4.dp, vertical = 6.dp),
-        )
-        Switch(
-            checked = askMode, onCheckedChange = onMode,
-            modifier = Modifier.padding(horizontal = 4.dp),
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = Color(0xFF101010), checkedTrackColor = Color(0xFFB0B0B0),
-                uncheckedThumbColor = Color(0xFF8A8A8A), uncheckedTrackColor = Color(0xFF242424), uncheckedBorderColor = Color(0xFF8A8A8A),
-            ),
-        )
-        Text(
-            "Ask", color = if (askMode) SwitchInk else SwitchMuted, style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.clickable { onMode(true) }.padding(horizontal = 4.dp, vertical = 6.dp),
-        )
-        Spacer(Modifier.weight(1f))
+private fun CompactAskSwitch(askMode: Boolean, target: AskTarget, onMode: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
         if (askMode) {
-            val (label, ink) = when (target) {
-                AskTarget.Remote -> "Remote · Nitro" to RemoteInk
-                AskTarget.Local -> "Local · on-device" to LocalInk
-            }
+            val (label, ink) = AskBadge.label(target) to if (target == AskTarget.Remote) RemoteInk else LocalInk
             Text(
-                label, color = ink, style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.background(Color(0xFF1A1A1A), RoundedCornerShape(10.dp)).padding(horizontal = 8.dp, vertical = 3.dp),
+                label, color = ink, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                modifier = Modifier.background(Color(0xFF1A1A1A), RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
             )
+            Spacer(Modifier.width(6.dp))
         }
+        Text(
+            "Search", color = if (askMode) SwitchMuted else SwitchInk, style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.clickable { onMode(false) }.padding(horizontal = 3.dp, vertical = 4.dp),
+        )
+        // M3 Switch is 52×32 with a 48dp touch target; scale it down inside a fixed 36×22 slot.
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides 0.dp) {
+            Box(Modifier.size(width = 36.dp, height = 22.dp), contentAlignment = Alignment.Center) {
+                Switch(
+                    checked = askMode, onCheckedChange = onMode,
+                    modifier = Modifier.scale(0.65f).semantics { contentDescription = "Ask mode" },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color(0xFF101010), checkedTrackColor = Color(0xFFB0B0B0),
+                        uncheckedThumbColor = Color(0xFF8A8A8A), uncheckedTrackColor = Color(0xFF242424), uncheckedBorderColor = Color(0xFF8A8A8A),
+                    ),
+                )
+            }
+        }
+        Text(
+            "Ask", color = if (askMode) SwitchInk else SwitchMuted, style = MaterialTheme.typography.labelSmall,
+            modifier = Modifier.clickable { onMode(true) }.padding(horizontal = 3.dp, vertical = 4.dp),
+        )
+        Spacer(Modifier.width(4.dp))
     }
 }
 

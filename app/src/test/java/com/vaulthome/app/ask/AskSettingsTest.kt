@@ -38,4 +38,10 @@ class AskSettingsTest {
         assertEquals(AskTarget.Remote, AskSettings().target)
         assertEquals(AskTarget.Local, AskSettings(nitroEnabled = false).target)
     }
+
+    @Test fun topBarBadgeLabels() {
+        assertEquals("Remote · Nitro", AskBadge.label(AskTarget.Remote))
+        assertEquals("Local · on-device", AskBadge.label(AskTarget.Local))
+        assertEquals("Remote · Nitro", AskBadge.label(AskSettings().target))
+    }
 }

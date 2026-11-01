@@ -8,7 +8,7 @@ import kotlinx.coroutines.flow.StateFlow
  * Ask settings. No API key lives here (or anywhere in the APK): Nitro is reached on the home LAN or over
  * Tailscale HTTPS.
  *
- * @property askEnabled feature flag for Ask: shows the Ask ↔ Search switch above the search field. Off = Search only.
+ * @property askEnabled feature flag for Ask: shows the compact Search ↔ Ask switch in the top bar (left of Settings). Off = Search only.
  * @property askMode last chosen mode of that switch (true = Ask), persisted across restarts.
  * @property nitroEnabled try the Nitro before the on-device path.
  * @property nitroBaseUrl root of VaultSearch's **chat proxy** on Nitro (`contrib/chat_proxy.py`), which injects
@@ -59,6 +59,14 @@ data class AskSettings(
 
 /** Where Ask goes first: Nitro over the network, or the phone itself. */
 enum class AskTarget { Remote, Local }
+
+/** Text of the small remote/local badge shown next to the top-bar switch in Ask mode. */
+object AskBadge {
+    fun label(target: AskTarget): String = when (target) {
+        AskTarget.Remote -> "Remote · Nitro"
+        AskTarget.Local -> "Local · on-device"
+    }
+}
 
 class AskSettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("vaulthome_ask", Context.MODE_PRIVATE)
