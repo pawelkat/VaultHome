@@ -9,7 +9,7 @@ import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
 
-/** Result of `GET {base}/health` on llama-server. */
+/** Result of `GET {base}/health` (the chat proxy forwards it to llama-server). */
 sealed interface Health {
     data object Ok : Health
     /** llama-server answers 503 while it loads the model. */
@@ -29,7 +29,8 @@ data class ChatReply(val content: String, val model: String?)
 class NitroException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
 /**
- * Plain `HttpURLConnection` client for llama-server (OpenAI-compatible). No API key header: the Nitro
+ * Plain `HttpURLConnection` client for Nitro's chat proxy (OpenAI-compatible; the proxy runs vault_search
+ * server-side and returns a finished message, so no tool handling here). No API key header: the Nitro
  * server has none today, and a key must never be baked into the APK.
  */
 class NitroClient(

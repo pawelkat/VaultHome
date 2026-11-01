@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- HTTPS everywhere (model downloads, links). Plain http only to the Nitro llama-server on the home LAN
-     and to localhost, for the Ask path. No API key is involved. -->
+<!-- HTTPS everywhere (model downloads, links, Tailscale https://nitro5.tailf52603.ts.net). Plain http only to
+     Nitro's chat proxy on the home LAN (192.168.1.18:8082) and to localhost, for the Ask path. No API key. -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">

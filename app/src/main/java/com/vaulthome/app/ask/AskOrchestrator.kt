@@ -128,11 +128,15 @@ class AskOrchestrator(
     }
 }
 
-/** Light system prompt mirroring the Nitro chat page; local hits are only attached when grounding is on. */
+/**
+ * Light client system prompt. The Nitro chat proxy puts its own `System/Nitro5 Qwen.md` prompt first and appends
+ * this one after it. Local hits are only attached when grounding is on.
+ */
 object NitroPrompt {
     const val SYSTEM =
         "You answer questions about Pawel's Obsidian vault (notes, projects, devices, people). " +
-            "Be brief and concrete. If you do not know from the vault, say so. Do not invent note paths."
+            "Be brief and concrete. Use the vault_search tool when it is available before saying you do not know. " +
+            "If the vault does not have it, say so. Do not invent note paths."
 
     fun messages(question: String, context: List<Citation>): List<ChatMessage> {
         val user = if (context.isEmpty()) {

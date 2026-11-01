@@ -109,7 +109,7 @@ private fun AskSettingsSection(askViewModel: com.vaulthome.app.ask.AskViewModel)
     OutlinedTextField(
         value = url,
         onValueChange = { url = it },
-        label = { Text("Nitro base URL") },
+        label = { Text("Nitro chat proxy URL") },
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
@@ -120,12 +120,22 @@ private fun AskSettingsSection(askViewModel: com.vaulthome.app.ask.AskViewModel)
         OutlinedButton(onClick = {
             store.update { it.copy(nitroBaseUrl = url) }; url = store.state.value.nitroBaseUrl; askViewModel.testNitro()
         }) { Text("Test /health") }
-        TextButton(onClick = { url = com.vaulthome.app.ask.AskSettings.DEFAULT_NITRO_URL; store.update { it.copy(nitroBaseUrl = url) } }) { Text("Default") }
     }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(onClick = { url = com.vaulthome.app.ask.AskSettings.DEFAULT_NITRO_URL; store.update { it.copy(nitroBaseUrl = url) } }) { Text("Home Wi‑Fi") }
+        TextButton(onClick = { url = com.vaulthome.app.ask.AskSettings.TAILSCALE_NITRO_URL; store.update { it.copy(nitroBaseUrl = url) } }) { Text("Tailscale") }
+    }
+    Text(
+        "Ask must use Nitro's chat proxy (adds the Nitro5 Qwen system prompt and runs vault_search), " +
+            "not raw llama-server. Home Wi‑Fi: http://192.168.1.18:8082. Tailscale: https://nitro5.tailf52603.ts.net. " +
+            "Raw :8080 answers without vault tools — avoid it for Ask. The Wi‑Fi URL needs the proxy listening on the LAN " +
+            "(BIND=0.0.0.0); the shipped service binds 127.0.0.1, which only Tailscale Serve reaches.",
+        color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
+    )
     health?.let { Text(it, color = Color(0xFF8A8A8A)) }
     SwitchRow("Send local hits to Nitro as context", ask.groundNitro) { v -> store.update { it.copy(groundNitro = v) } }
     Text(
-        "Plain http works only to 192.168.1.18 and localhost. No API key is stored. On-device answers (Gemma 4 E2B) come in a later build; until then Ask falls back to matching notes.",
+        "Plain http works only to 192.168.1.18 and localhost; Tailscale uses HTTPS. No API key is stored. On-device answers (Gemma 4 E2B) come in a later build; until then Ask falls back to matching notes.",
         color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
     )
 }
