@@ -62,7 +62,6 @@ import com.vaulthome.app.search.SearchFilter
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
@@ -167,9 +166,6 @@ fun SearchScaffold(
                             if (askBusy) {
                                 IconButton(onClick = askVm::cancel) { Icon(Icons.Filled.Close, contentDescription = "Cancel ask") }
                             } else if (ask.question.isNotEmpty()) {
-                                IconButton(onClick = { submitAsk() }) {
-                                    Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Ask", tint = Color(0xFFB0B0B0))
-                                }
                                 IconButton(onClick = askVm::clear) { Icon(Icons.Filled.Close, contentDescription = "Clear question") }
                             }
                         }
