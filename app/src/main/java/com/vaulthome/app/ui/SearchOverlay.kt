@@ -89,7 +89,8 @@ val TagPalette = listOf(Color(0xFF4A90E2), Color(0xFFF2A93B), Color(0xFF5CC489),
  *
  * When Ask is enabled in Settings, a compact Search ↔ Ask switch sits in the top bar left of Settings (mode persisted in AskSettings).
  * In Ask mode the same field takes a question (IME Send); the answer replaces [content] with a markdown panel
- * rendered by [RenderedNote] until it is dismissed (×, back, clear, opening a source) or the mode goes back to Search.
+ * rendered by [RenderedNote] until it is dismissed (×, back, clear) or the mode goes back to Search. Opening a source
+ * only hides it (in-memory cache in [AskViewModel]); back from that note shows the same answer again.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -108,7 +109,7 @@ fun SearchScaffold(
     val ask by askVm.state.collectAsStateWithLifecycle()
     val askMode = askSettings.askActive
     val askBusy = ask.phase != null
-    val showAnswer = askMode && ask.outcome != null
+    val showAnswer = com.vaulthome.app.ask.AskCache.visible(ask, askMode)
     val focusManager = LocalFocusManager.current
     var open by remember { mutableStateOf(false) }
     var picker by remember { mutableStateOf(false) }
@@ -135,6 +136,7 @@ fun SearchScaffold(
                     if (askSettings.askEnabled) {
                         CompactAskSwitch(askMode = askMode, target = askSettings.target) { mode ->
                             close()
+                            if (mode != askMode) askVm.modeChanged()
                             askStore.update { it.copy(askMode = mode) }
                         }
                     }
@@ -188,7 +190,7 @@ fun SearchScaffold(
                     question = ask.asked,
                     outcome = outcome,
                     onDismiss = askVm::dismissAnswer,
-                    onOpen = { path -> askVm.dismissAnswer(); onOpen(path) },
+                    onOpen = { path -> askVm.openSource(path); onOpen(path) },
                 )
             } else {
                 content()

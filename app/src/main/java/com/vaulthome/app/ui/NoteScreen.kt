@@ -36,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -76,14 +77,20 @@ fun NoteScreen(
     // Settings round-trips and process death; popped entries are dropped.
     val holder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
     val entryKey = "${stack.size - 1}:${stack.last()}"
+    // Ask answer cache: back from a source opened from an Ask answer lands on that answer again.
+    val askVm: com.vaulthome.app.ask.AskViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val ask by askVm.state.collectAsStateWithLifecycle()
     holder.SaveableStateProvider(entryKey) { NoteContent(
         path = stack.last(),
         onBack = {
-            if (stack.size > 1) { holder.removeState(entryKey); stack = NoteStack.pop(stack) } else onBack()
+            // Restores the answer when leaving the source note; if the source was the bottom note, stay on it
+            // (the answer panel is shown over it) instead of leaving the screen.
+            val restored = askVm.returnFrom(stack.last())
+            if (stack.size > 1) { holder.removeState(entryKey); stack = NoteStack.pop(stack) } else if (!restored) onBack()
         },
         onOpenNote = { stack = NoteStack.push(stack, it) },
         viewModel = viewModel,
-        canGoBack = stack.size > 1,
+        canGoBack = stack.size > 1 || com.vaulthome.app.ask.AskCache.canReturnFrom(ask, stack.last()),
         actions = actions,
         topBar = topBar,
     ) }
