@@ -20,7 +20,16 @@ import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -44,13 +53,14 @@ import com.vaulthome.app.markdown.SafeLinks
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.FilterChip
 import androidx.compose.runtime.saveable.rememberSaveable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 private val PageInk = Color(0xFFE6E6E6)
 private val PageMuted = Color(0xFF8A8A8A)
+private val IconOn = Color(0xFFE6E6E6)
+private val IconOff = Color(0xFF808080)
 
 @Composable
 fun NoteScreen(
@@ -137,26 +147,27 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
     SearchScaffold(viewModel = viewModel, onOpen = { if (it != path) onOpenNote(it) }, actions = actions, topBar = topBar) {
         IndexStatusLine(viewModel)
         Text(path, color = PageInk, style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (canGoBack) OutlinedButton(onClick = onBack) { Text("Back") }
-            Button(
-                onClick = {
-                    val uri = ObsidianLinks.vaultFileUri(path)
-                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(uri))
-                    try {
-                        context.startActivity(intent)
-                    } catch (_: ActivityNotFoundException) {
-                        error = "Obsidian is not installed"
-                    }
-                },
-            ) { Text("Open in Obsidian") }
-        }
         if (error != null) {
             Text(error!!, color = MaterialTheme.colorScheme.error)
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = !raw, onClick = { raw = false }, label = { Text("Rendered") })
-            FilterChip(selected = raw, onClick = { raw = true }, label = { Text("Raw") })
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (canGoBack) OutlinedButton(onClick = onBack) { Text("Back", color = PageInk) }
+            Spacer(Modifier.weight(1f))
+            IconButton(onClick = { raw = false }) {
+                Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Show rendered",
+                    tint = if (!raw) IconOn else IconOff, modifier = Modifier.size(20.dp))
+            }
+            IconButton(onClick = { raw = true }, modifier = Modifier.semantics { contentDescription = "Show raw" }) {
+                Text("</>", color = if (raw) IconOn else IconOff, fontFamily = FontFamily.Monospace,
+                    style = MaterialTheme.typography.labelMedium)
+            }
+            IconButton(onClick = {
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(ObsidianLinks.vaultFileUri(path)))
+                try { context.startActivity(intent) } catch (_: ActivityNotFoundException) { error = "Obsidian is not installed" }
+            }) {
+                Icon(Icons.AutoMirrored.Filled.ExitToApp, contentDescription = "Open in Obsidian",
+                    tint = IconOff, modifier = Modifier.size(20.dp))
+            }
         }
         Box(
             modifier = Modifier
