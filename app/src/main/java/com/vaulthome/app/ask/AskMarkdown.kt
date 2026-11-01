@@ -2,7 +2,7 @@ package com.vaulthome.app.ask
 
 /**
  * Turns an [AskOutcome] into markdown for the home note panel (rendered by `RenderedNote` / `MarkdownText`).
- * First line says where the answer came from (remote Nitro vs on-device vs search-only); sources are wikilinks
+ * Provenance is shown once by the panel header ([sourceLabel]), not in the body; sources are wikilinks
  * built from local-index paths only, so a tap opens the note in-app.
  */
 object AskMarkdown {
@@ -15,13 +15,19 @@ object AskMarkdown {
 
     /** One-line source label, also used as the panel badge. */
     fun sourceLabel(outcome: AskOutcome): String = when (outcome) {
-        is AskOutcome.Nitro -> "Answer from Nitro (remote)" + (outcome.model?.takeIf { it.isNotBlank() }?.let { " · $it" } ?: "")
-        is AskOutcome.Local -> "On-device answer (local)"
-        is AskOutcome.SearchOnly -> "No answer · matching notes (local search)"
+        is AskOutcome.Nitro -> "Nitro" + (shortModel(outcome.model)?.let { " · $it" } ?: "")
+        is AskOutcome.Local -> "On-device"
+        is AskOutcome.SearchOnly -> "Matching notes"
     }
 
+    /** Model id or file path → short name: basename without `.gguf`; null when blank. */
+    fun shortModel(model: String?): String? {
+        val m = model?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        return m.substringAfterLast('/').substringAfterLast('\\').removeSuffix(".gguf").takeIf { it.isNotEmpty() }
+    }
+
+    /** Provenance lives only in the panel header row, so the body starts with the question/answer. */
     fun format(question: String, outcome: AskOutcome): String = buildString {
-        append("**").append(escapeInline(sourceLabel(outcome))).append("**\n\n")
         if (question.isNotBlank()) append("*Q: ").append(escapeInline(oneLine(question))).append("*\n\n")
         when (outcome) {
             is AskOutcome.Nitro -> append(body(outcome.answer)).append("\n\n")

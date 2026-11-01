@@ -12,7 +12,9 @@ class AskMarkdownTest {
 
     @Test fun nitroIsMarkedRemoteWithModel() {
         val md = AskMarkdown.format("What pins?", AskOutcome.Nitro("Use GPIO 12.", "qwen3", cites, null))
-        assertTrue(md.lines().first().contains("Answer from Nitro (remote) · qwen3"))
+        assertFalse(md.contains("Answer from") || md.contains("qwen3"))
+        assertTrue(md.lines().first().startsWith("*Q:"))
+        assertEquals("Nitro · qwen3", AskMarkdown.sourceLabel(AskOutcome.Nitro("a", "qwen3", cites, null)))
         assertTrue(md.contains("Use GPIO 12."))
         assertTrue(md.contains("[[Projects/CrowPanel.md|Projects/CrowPanel.md › Wiring]]"))
         assertTrue(md.contains("[[Devices/Nitro5.md|Devices/Nitro5.md]]"))
@@ -20,10 +22,10 @@ class AskMarkdownTest {
 
     @Test fun localAndSearchOnlyAreMarkedLocal() {
         val local = AskMarkdown.format("q", AskOutcome.Local("a", NitroSkip.Down, "timeout", cites, null))
-        assertTrue(local.lines().first().contains("On-device answer (local)"))
+        assertEquals("On-device", AskMarkdown.sourceLabel(AskOutcome.Local("a", NitroSkip.Down, "timeout", cites, null)))
         assertTrue(local.contains("Nitro skipped: timeout"))
         val so = AskMarkdown.format("q", AskOutcome.SearchOnly(NitroSkip.Disabled, "Nitro is off", "No local model", emptyList(), null))
-        assertTrue(so.lines().first().contains("(local search)"))
+        assertEquals("Matching notes", AskMarkdown.sourceLabel(AskOutcome.SearchOnly(NitroSkip.Disabled, "x", "", emptyList(), null)))
         assertTrue(so.contains("No matching notes"))
     }
 
@@ -34,11 +36,16 @@ class AskMarkdownTest {
         assertTrue(parts.body.contains("body"))
     }
 
-    @Test fun headerRendersAsBoldParagraphAndSourcesAsWikilinks() {
-        val md = AskMarkdown.format("why *now*?", AskOutcome.Nitro("ok", null, cites, null))
+    @Test fun modelPathIsShortened() {
+        assertEquals("Qwen3-8B-Q4_K_M", AskMarkdown.shortModel("/home/pawelk/models/Qwen3-8B-Q4_K_M.gguf"))
+        assertEquals(null, AskMarkdown.shortModel("  "))
+        assertEquals("Nitro", AskMarkdown.sourceLabel(AskOutcome.Nitro("a", null, emptyList(), null)))
+    }
+
+    @Test fun answerStartsBodyAndSourcesAreWikilinks() {
+        val md = AskMarkdown.format("", AskOutcome.Nitro("ok", "/m/q.gguf", cites, null))
+        assertTrue(md.startsWith("ok"))
         val blocks = MarkdownBlocks.parse(md)
-        val first = blocks.first() as MdBlock.Paragraph
-        assertTrue(first.text.all { it.bold })
         val links = blocks.filterIsInstance<MdBlock.ListItem>().flatMap { it.text }.mapNotNull { it.wikiTarget }
         assertEquals(listOf("Projects/CrowPanel.md", "Devices/Nitro5.md"), links)
     }
