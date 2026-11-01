@@ -36,7 +36,7 @@ class NitroException(message: String, cause: Throwable? = null) : IOException(me
 class NitroClient(
     private val healthTimeoutMs: Int = 1_500,
     private val chatConnectTimeoutMs: Int = 3_000,
-    private val chatReadTimeoutMs: Int = 120_000,
+    private val chatReadTimeoutMs: Int = 300_000,
 ) : NitroGateway {
 
     override suspend fun health(baseUrl: String): Health = withContext(Dispatchers.IO) {

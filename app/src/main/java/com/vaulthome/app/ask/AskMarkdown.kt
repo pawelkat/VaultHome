@@ -10,7 +10,7 @@ package com.vaulthome.app.ask
 object AskMarkdown {
     fun phaseText(phase: AskPhase) = when (phase) {
         AskPhase.CheckingNitro -> "Checking Nitro…"
-        AskPhase.AskingNitro -> "Asking Nitro…"
+        AskPhase.AskingNitro -> "Asking Nitro… can take a minute"
         AskPhase.Searching -> "Searching the vault…"
         AskPhase.Generating -> "Answering on the phone…"
     }
