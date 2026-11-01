@@ -196,16 +196,8 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
             } else {
                 RenderedNote(
                     markdown = body,
-                    onLink = { uri -> LinkOpener.open(context, uri) },
-                    onWikiLink = { target ->
-                        scope.launch {
-                            val graph = (context.applicationContext as VaultHomeApp).graph
-                            val paths = withContext(Dispatchers.IO) { graph.database.chunks().allNotes().map { it.path } }
-                            val resolved = WikiLinks.resolve(target, paths)
-                            if (resolved != null && resolved != path) onOpenNote(resolved)
-                            else if (resolved == null) Toast.makeText(context, "Note not found in the index: $target", Toast.LENGTH_SHORT).show()
-                        }
-                    },
+                    onLink = { uri -> VaultLinkOpener.onLink(context, scope, uri, current = path, onOpenNote = onOpenNote) },
+                    onWikiLink = { target -> VaultLinkOpener.onWikiLink(context, scope, target, current = path, onOpenNote = onOpenNote) },
                 )
             }
         }

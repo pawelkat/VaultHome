@@ -39,14 +39,14 @@ class AskOrchestratorTest {
         local: AnswerEngine = LocalAnswerEngineStub,
     ) = AskOrchestrator(nitro, { settings }, search, local)
 
-    @Test fun nitroUpAnswersWithLocalCitations() = runBlocking {
+    @Test fun nitroUpAnswersWithoutLocalCitations() = runBlocking {
         val nitro = FakeNitro()
         val phases = mutableListOf<AskPhase>()
         val out = orchestrator(nitro).ask("  watch?  ") { phases += it }
         out as AskOutcome.Nitro
         assertEquals("Install the watch APK.", out.answer)
-        assertEquals(listOf("Notes/VaultHome Watch.md", "Notes/VaultHome.md"), out.citations.map { it.path })
-        assertEquals("obsidian://open?vault=Vault&file=Notes/VaultHome%20Watch", out.citations[0].obsidianUri)
+        // Nitro cites its own sources; the on-device hits are only for the fallback path.
+        assertTrue(out.citations.isEmpty())
         assertEquals(listOf(AskPhase.CheckingNitro, AskPhase.AskingNitro), phases)
         // Thin client: only the user question; the chat proxy adds the system prompt, date block and tools.
         assertEquals(listOf(ChatMessage("user", "watch?")), nitro.chats.single())
@@ -67,6 +67,7 @@ class AskOrchestratorTest {
         assertEquals(NitroSkip.Disabled, out.nitro)
         assertEquals(0, nitro.healthCalls)
         assertEquals(2, out.citations.size)
+        assertEquals("obsidian://open?vault=Vault&file=Notes/VaultHome%20Watch", out.citations[0].obsidianUri)
         assertEquals(LocalAnswerEngineStub.unavailableReason, out.localDetail)
     }
 
@@ -102,7 +103,7 @@ class AskOrchestratorTest {
         val out = orchestrator(FakeNitro(), search = { error("Download the embedding model") }).ask("watch?")
         out as AskOutcome.Nitro
         assertTrue(out.citations.isEmpty())
-        assertEquals("Download the embedding model", out.searchError)
+        assertEquals(null, out.searchError)
     }
 
     @Test fun searchFailureAndNitroDownIsStillAnOutcome() = runBlocking {

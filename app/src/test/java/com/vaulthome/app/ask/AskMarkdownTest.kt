@@ -16,8 +16,15 @@ class AskMarkdownTest {
         assertTrue(md.lines().first().startsWith("*Q:"))
         assertEquals("Nitro · qwen3", AskMarkdown.sourceLabel(AskOutcome.Nitro("a", "qwen3", cites, null)))
         assertTrue(md.contains("Use GPIO 12."))
-        assertTrue(md.contains("[[Projects/CrowPanel.md|Projects/CrowPanel.md › Wiring]]"))
-        assertTrue(md.contains("[[Devices/Nitro5.md|Devices/Nitro5.md]]"))
+        // No on-device Sources footer under a Nitro answer, even if citations were passed.
+        assertFalse(md.contains("### Sources") || md.contains("CrowPanel") || md.contains("No matching notes"))
+    }
+
+    @Test fun nitroOwnSourcesAreKeptVerbatim() {
+        val answer = "Done.\n\nSources:\n- [2026-11-01](https://nitro5.tailf52603.ts.net/vault/Daily/2026-11-01.md)"
+        val md = AskMarkdown.format("q", AskOutcome.Nitro(answer, null, emptyList(), null))
+        assertTrue(md.contains("(https://nitro5.tailf52603.ts.net/vault/Daily/2026-11-01.md)"))
+        assertEquals(1, Regex("Sources").findAll(md).count())
     }
 
     @Test fun localAndSearchOnlyAreMarkedLocal() {
@@ -42,9 +49,9 @@ class AskMarkdownTest {
         assertEquals("Nitro", AskMarkdown.sourceLabel(AskOutcome.Nitro("a", null, emptyList(), null)))
     }
 
-    @Test fun answerStartsBodyAndSourcesAreWikilinks() {
-        val md = AskMarkdown.format("", AskOutcome.Nitro("ok", "/m/q.gguf", cites, null))
-        assertTrue(md.startsWith("ok"))
+    @Test fun answerStartsBodyAndLocalSourcesAreWikilinks() {
+        assertTrue(AskMarkdown.format("", AskOutcome.Nitro("ok", "/m/q.gguf", cites, null)).startsWith("ok"))
+        val md = AskMarkdown.format("", AskOutcome.Local("ok", NitroSkip.Down, "x", cites, null))
         val blocks = MarkdownBlocks.parse(md)
         val links = blocks.filterIsInstance<MdBlock.ListItem>().flatMap { it.text }.mapNotNull { it.wikiTarget }
         assertEquals(listOf("Projects/CrowPanel.md", "Devices/Nitro5.md"), links)

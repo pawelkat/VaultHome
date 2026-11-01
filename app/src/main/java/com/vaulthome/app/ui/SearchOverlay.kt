@@ -45,6 +45,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
@@ -345,6 +346,7 @@ private fun CompactAskSwitch(askMode: Boolean, target: AskTarget, onMode: (Boole
 @Composable
 private fun ColumnScope.AskAnswerPanel(question: String, outcome: AskOutcome, onDismiss: () -> Unit, onOpen: (String) -> Unit) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val markdown = remember(question, outcome) { AskMarkdown.format(question, outcome) }
     val remote = outcome is AskOutcome.Nitro
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -368,10 +370,8 @@ private fun ColumnScope.AskAnswerPanel(question: String, outcome: AskOutcome, on
     ) {
         RenderedNote(
             markdown = markdown,
-            onLink = { uri -> LinkOpener.open(context, uri) },
-            onWikiLink = { target ->
-                WikiLinks.resolve(target, outcome.citations.map { it.path })?.let(onOpen)
-            },
+            onLink = { uri -> VaultLinkOpener.onLink(context, scope, uri, onOpenNote = onOpen) },
+            onWikiLink = { target -> VaultLinkOpener.onWikiLink(context, scope, target, onOpenNote = onOpen) },
         )
     }
 }

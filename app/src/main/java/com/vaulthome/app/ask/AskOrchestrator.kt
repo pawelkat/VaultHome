@@ -77,8 +77,9 @@ class AskOrchestrator(
                     onPhase(AskPhase.AskingNitro)
                     try {
                         val reply = nitro.chat(config.nitroBaseUrl, NitroPrompt.messages(q))
-                        val hits = hitsJob.await()
-                        return@coroutineScope AskOutcome.Nitro(reply.content, reply.model, hits.citations, hits.error)
+                        // Nitro's answer cites its own sources; the on-device search was only a fallback.
+                        hitsJob.cancel()
+                        return@coroutineScope AskOutcome.Nitro(reply.content, reply.model, emptyList(), null)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {

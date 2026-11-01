@@ -2,8 +2,10 @@ package com.vaulthome.app.ask
 
 /**
  * Turns an [AskOutcome] into markdown for the home note panel (rendered by `RenderedNote` / `MarkdownText`).
- * Provenance is shown once by the panel header ([sourceLabel]), not in the body; sources are wikilinks
- * built from local-index paths only, so a tap opens the note in-app.
+ * Provenance is shown once by the panel header ([sourceLabel]), not in the body. A Nitro answer carries
+ * its own sources (the proxy's `vault_search` cites `…/vault/<path>` links, opened in-app from the local
+ * vault by `VaultLinkOpener`), so no on-device Sources footer is added — the phone's EmbeddingGemma hits
+ * were a different search and contradicted it. Local / search-only outcomes list the local hits as wikilinks.
  */
 object AskMarkdown {
     fun phaseText(phase: AskPhase) = when (phase) {
@@ -41,6 +43,7 @@ object AskMarkdown {
                 append("\n\n")
             }
         }
+        if (outcome is AskOutcome.Nitro) return@buildString
         outcome.searchError?.let { append("*Local search failed: ").append(escapeInline(oneLine(it))).append("*\n\n") }
         if (outcome.citations.isNotEmpty()) {
             append("---\n\n### Sources\n\n")
