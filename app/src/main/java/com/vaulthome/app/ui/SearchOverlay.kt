@@ -360,6 +360,8 @@ private fun ColumnScope.AskAnswerPanel(question: String, outcome: AskOutcome, on
             AskMarkdown.sourceLabel(outcome), color = SwitchInk, style = MaterialTheme.typography.titleSmall,
             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
         )
+        // Sends exactly the markdown rendered below (header line, answer body, sources).
+        X4SendButton(onSend = { it.sendAnswer(markdown) }, modifier = Modifier.size(32.dp))
         IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
             Icon(Icons.Filled.Close, contentDescription = "Close answer", tint = Color(0xFFB0B0B0), modifier = Modifier.size(20.dp))
         }
