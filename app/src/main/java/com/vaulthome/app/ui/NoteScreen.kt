@@ -112,6 +112,8 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
     val keyboard = LocalSoftwareKeyboardController.current
     var body by remember(path) { mutableStateOf("Loading the note…") }
     var error by remember(path) { mutableStateOf<String?>(null) }
+    // True only when [body] is the vault file itself (what the Raw tab shows), not the indexed-chunk fallback.
+    var fileLoaded by remember(path) { mutableStateOf(false) }
     var raw by rememberSaveable { mutableStateOf(false) }
     // Scroll is restored only after the body has loaded (an early restore would be clamped to the placeholder).
     val scroll = rememberScrollState()
@@ -142,6 +144,7 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
         }
         if (file != null) {
             body = file
+            fileLoaded = true
             error = null
         } else if (indexed.isBlank()) {
             error = error ?: "Could not read $path"
@@ -167,6 +170,12 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
             IconButton(onClick = { raw = true }, modifier = Modifier.semantics { contentDescription = "Show raw" }) {
                 Text("</>", color = if (raw) IconOn else IconOff, fontFamily = FontFamily.Monospace,
                     style = MaterialTheme.typography.labelMedium)
+            }
+            if (!com.vaulthome.app.x4.X4Payload.isVaultKeep(path)) {
+                X4SendButton(onSend = { x4 ->
+                    if (fileLoaded) x4.sendNote(path, body)
+                    else Toast.makeText(context, "The note file is not loaded yet, so nothing was sent", Toast.LENGTH_SHORT).show()
+                })
             }
             IconButton(onClick = {
                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(ObsidianLinks.vaultFileUri(path)))
