@@ -8,27 +8,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class X4SettingsTest {
-    @Test fun defaultIsLastKnownLease() = assertEquals("http://192.168.1.27", X4Settings().baseUrl)
-
-    @Test fun normalize() {
-        assertEquals("http://192.168.1.31", X4Settings.normalizeBaseUrl(" 192.168.1.31/ "))
-        assertEquals("http://192.168.1.31", X4Settings.normalizeBaseUrl("http://192.168.1.31/mcp/"))
-        assertEquals("http://x4.local:8080", X4Settings.normalizeBaseUrl("x4.local:8080"))
-        assertEquals(X4Settings.DEFAULT_X4_URL, X4Settings.normalizeBaseUrl(""))
-        assertEquals(8080, X4Settings.port("http://x4.local:8080"))
-        assertEquals(80, X4Settings.port("http://192.168.1.27"))
-        assertEquals("192.168.1.27", X4Settings.host("http://192.168.1.27:80"))
+    @Test fun defaultsAreBleIdentity() {
+        val s = X4Settings()
+        assertEquals("VaultHome X4", s.deviceName)
+        assertEquals("C2:45:6B:2D:4E:FC", s.addressHint)
+        assertEquals("VaultHome X4 · C2:45:6B:2D:4E:FC", s.label)
     }
 
-    @Test fun problems() {
-        assertNull(X4Settings.problem("http://192.168.1.27"))
-        assertNull(X4Settings.problem("http://10.0.0.5"))
-        assertNull(X4Settings.problem("http://127.0.0.1:1234"))
-        assertNotNull(X4Settings.problem("http://192.168.1.26")) // CrowPanel
-        assertNotNull(X4Settings.problem("https://192.168.1.27"))
-        assertNotNull(X4Settings.problem("http://8.8.8.8"))
-        assertNotNull(X4Settings.problem("http://example.com"))
-        assertTrue(X4Settings.isLanHost("172.20.1.1"))
-        assertFalse(X4Settings.isLanHost("172.32.1.1"))
+    @Test fun normalize() {
+        assertEquals("VaultHome X4", X4Settings.normalizeName("  "))
+        assertEquals("My X4", X4Settings.normalizeName(" My X4 "))
+        assertEquals("C2:45:6B:2D:4E:FC", X4Settings.normalizeAddress(""))
+        assertEquals("C2:45:6B:2D:4E:FC", X4Settings.normalizeAddress(" c2-45-6b-2d-4e-fc "))
+        assertEquals("AA:BB:CC:DD:EE:FF", X4Settings.normalizeAddress("aa:bb:cc:dd:ee:ff"))
+    }
+
+    @Test fun addressProblems() {
+        assertNull(X4Settings.addressProblem("C2:45:6B:2D:4E:FC"))
+        assertNotNull(X4Settings.addressProblem("not-a-mac"))
+        assertNotNull(X4Settings.addressProblem("80:45:6B"))
+        assertTrue(X4Ble.isValidAddress("C2:45:6B:2D:4E:FC"))
+        assertFalse(X4Ble.isValidAddress("VaultHome X4"))
     }
 }

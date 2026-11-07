@@ -157,33 +157,50 @@ private fun X4SettingsSection() {
     val x4: com.vaulthome.app.x4.X4ViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
     val settings by store.state.collectAsStateWithLifecycle()
     val state by x4.state.collectAsStateWithLifecycle()
-    var url by remember { mutableStateOf(settings.baseUrl) }
+    var name by remember { mutableStateOf(settings.deviceName) }
+    var address by remember { mutableStateOf(settings.addressHint) }
+    val askScan = rememberX4BleScan(x4)
     val save = {
-        store.setBaseUrl(url); url = store.state.value.baseUrl; x4.probe(force = true)
+        store.setDevice(name, address)
+        name = store.state.value.deviceName
+        address = store.state.value.addressHint
+        askScan()
     }
     Text("X4 e-ink", style = MaterialTheme.typography.titleMedium, color = Ink)
     OutlinedTextField(
-        value = url,
-        onValueChange = { url = it },
-        label = { Text("X4 MCP address", color = Muted) },
+        value = name,
+        onValueChange = { name = it },
+        label = { Text("X4 Bluetooth name", color = Muted) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+    )
+    OutlinedTextField(
+        value = address,
+        onValueChange = { address = it },
+        label = { Text("X4 Bluetooth address", color = Muted) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
         keyboardActions = KeyboardActions(onDone = { save() }),
     )
-    com.vaulthome.app.x4.X4Settings.problem(com.vaulthome.app.x4.X4Settings.normalizeBaseUrl(url))?.let {
+    com.vaulthome.app.x4.X4Settings.addressProblem(com.vaulthome.app.x4.X4Settings.normalizeAddress(address))?.let {
         Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = { save() }) { Text("Save & test") }
-        TextButton(onClick = { url = com.vaulthome.app.x4.X4Settings.DEFAULT_X4_URL; save() }) { Text("Last known") }
+        OutlinedButton(onClick = { save() }) { Text("Save & scan") }
+        TextButton(onClick = {
+            name = com.vaulthome.app.x4.X4Ble.DEFAULT_NAME
+            address = com.vaulthome.app.x4.X4Ble.DEFAULT_ADDRESS
+            save()
+        }) { Text("Defaults") }
     }
     Text(com.vaulthome.app.x4.X4Text.detect(state.detect), color = Color(0xFF8A8A8A))
     Text(
-        "The X4 gets its address by DHCP; the last one seen was 192.168.1.27. When it changes, type the address " +
-            "printed on the glass (http://<ip>, VaultHome adds /mcp). Not the CrowPanel (192.168.1.26). " +
-            "When the X4 answers, the X4 button on a note sends its raw markdown and on an Ask answer sends the answer " +
-            "as shown. Up to 32,000 characters; VaultKeep is never sent.",
+        "The current X4 image speaks BLE only (no Wi-Fi, no pairing, no PIN). It will not appear in the phone's " +
+            "Bluetooth device list — VaultHome scans for the name VaultHome X4 itself. If nothing is found, press " +
+            "any key on the reader to wake it (do not hold power). The X4 button on a note sends its raw markdown " +
+            "and on an Ask answer sends the answer as shown. Up to 32,000 characters; VaultKeep is never sent.",
         color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
     )
 }

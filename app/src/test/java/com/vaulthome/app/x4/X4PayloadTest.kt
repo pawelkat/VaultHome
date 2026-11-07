@@ -38,6 +38,6 @@ class X4PayloadTest {
 
     @Test fun feedbackText() {
         assertEquals("Sent to X4: 1 page. The glass refreshes in a few seconds.", X4Text.sent(X4ShowResult("Queued 1 page(s)", 1, false, null)))
-        assertTrue(X4Text.detect(X4Detect.NotFound("http://192.168.1.27", "timed out")).startsWith("X4 not found"))
+        assertTrue(X4Text.detect(X4Detect.NotFound("VaultHome X4", "not advertising")).startsWith("X4 not found"))
     }
 }
