@@ -87,5 +87,14 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Bring the X4 display MCP back after a reboot or process kill, while the app is in the foreground.
+        val graph = (application as VaultHomeApp).graph
+        if (graph.x4Settings.server.value.enabled && !com.vaulthome.app.x4.mcp.X4McpService.state.value.running) {
+            com.vaulthome.app.x4.mcp.X4McpService.start(this)
+        }
+    }
+
     private val pendingVault = androidx.compose.runtime.mutableStateOf<VaultHomeViewModel?>(null)
 }

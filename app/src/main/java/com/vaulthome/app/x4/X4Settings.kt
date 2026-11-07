@@ -83,8 +83,33 @@ class X4SettingsStore(context: Context) {
         flow.value = next
     }
 
+    private val serverFlow = MutableStateFlow(
+        X4McpServerSettings(
+            enabled = prefs.getBoolean(KEY_MCP_ENABLED, false),
+            port = prefs.getInt(KEY_MCP_PORT, X4McpServerSettings.DEFAULT_PORT)
+                .takeIf { it in 1024..65535 } ?: X4McpServerSettings.DEFAULT_PORT,
+        ),
+    )
+    /** The display MCP VaultHome hosts for Grok Bot (forwards to the X4 over BLE). */
+    val server: StateFlow<X4McpServerSettings> = serverFlow
+
+    fun setServer(enabled: Boolean, port: Int) {
+        val next = X4McpServerSettings(enabled, port.takeIf { it in 1024..65535 } ?: X4McpServerSettings.DEFAULT_PORT)
+        prefs.edit().putBoolean(KEY_MCP_ENABLED, next.enabled).putInt(KEY_MCP_PORT, next.port).apply()
+        serverFlow.value = next
+    }
+
     private companion object {
         const val KEY_NAME = "x4_ble_name"
         const val KEY_ADDR = "x4_ble_address"
+        const val KEY_MCP_ENABLED = "x4_mcp_server_enabled"
+        const val KEY_MCP_PORT = "x4_mcp_server_port"
+    }
+}
+
+/** VaultHome's own display MCP server (POST /mcp on 0.0.0.0:[port]); off until enabled in Settings. */
+data class X4McpServerSettings(val enabled: Boolean = false, val port: Int = DEFAULT_PORT) {
+    companion object {
+        const val DEFAULT_PORT = 8765
     }
 }
