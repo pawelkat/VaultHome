@@ -12,12 +12,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 
-/** Detection state of the X4 at the configured address. Never guessed: only what the last probe saw. */
+/** Detection state of the X4 over BLE. Never guessed: only what the last scan saw. */
 sealed interface X4Detect {
     data object Unknown : X4Detect
-    data class Probing(val url: String) : X4Detect
-    data class Detected(val url: String, val status: X4Status) : X4Detect
-    data class NotFound(val url: String, val reason: String) : X4Detect
+    data class Probing(val label: String) : X4Detect
+    data class Detected(val label: String, val address: String, val status: X4Status = X4Status("")) : X4Detect
+    data class NotFound(val label: String, val reason: String) : X4Detect
 }
 
 data class X4UiState(val detect: X4Detect = X4Detect.Unknown, val sending: Boolean = false) {
@@ -34,8 +34,8 @@ object X4Text {
 
     fun detect(d: X4Detect): String = when (d) {
         X4Detect.Unknown -> "X4 not checked yet"
-        is X4Detect.Probing -> "Looking for the X4 at ${d.url}…"
-        is X4Detect.Detected -> "X4 found at ${d.url}" + (d.status.stored?.let { " · stored $it" } ?: "")
+        is X4Detect.Probing -> "Looking for the X4 (${d.label}) over Bluetooth…"
+        is X4Detect.Detected -> "X4 found: ${d.label}"
         is X4Detect.NotFound -> "X4 not found: ${d.reason}"
     }
 }
@@ -49,23 +49,25 @@ class X4ViewModel(app: Application) : AndroidViewModel(app) {
     val events = messages.receiveAsFlow()
     private var probeJob: Job? = null
     private var lastProbeAt = 0L
-    private var lastProbeUrl: String? = null
+    private var lastProbeKey: String? = null
 
-    /** Probes the configured address. Throttled to once per [minGapMs] for the same URL unless [force]. */
+    /** Scans for the configured name/address. Throttled to once per [minGapMs] unless [force]. */
     fun probe(force: Boolean = false, minGapMs: Long = 15_000) {
         if (flow.value.sending || probeJob?.isActive == true) return
-        val url = graph.x4Settings.state.value.baseUrl
+        val settings = graph.x4Settings.state.value
+        val key = settings.label
         val now = System.currentTimeMillis()
-        if (!force && url == lastProbeUrl && now - lastProbeAt < minGapMs) return
-        lastProbeAt = now; lastProbeUrl = url
-        flow.value = flow.value.copy(detect = X4Detect.Probing(url))
+        if (!force && key == lastProbeKey && now - lastProbeAt < minGapMs) return
+        lastProbeAt = now; lastProbeKey = key
+        flow.value = flow.value.copy(detect = X4Detect.Probing(key))
         probeJob = viewModelScope.launch {
             val next = try {
-                X4Detect.Detected(url, graph.x4.probe(url))
+                val found = graph.x4.probe(settings)
+                X4Detect.Detected(found.label, found.address)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                X4Detect.NotFound(url, e.message ?: "unreachable")
+                X4Detect.NotFound(key, e.message ?: "not advertising")
             }
             flow.value = flow.value.copy(detect = next)
         }
@@ -81,25 +83,33 @@ class X4ViewModel(app: Application) : AndroidViewModel(app) {
             is X4Payload.Check.Ok -> Unit
         }
         if (flow.value.sending) return
-        val url = graph.x4Settings.state.value.baseUrl
+        val settings = graph.x4Settings.state.value
+        val key = settings.label
         probeJob?.cancel()
         flow.value = flow.value.copy(sending = true)
         viewModelScope.launch {
             try {
-                val result = graph.x4.showText(url, check.text)
-                flow.value = flow.value.copy(detect = X4Detect.Detected(url, result.status ?: X4Status("")))
+                val result = graph.x4.showText(settings, check.text)
+                val addr = (flow.value.detect as? X4Detect.Detected)?.address ?: settings.addressHint
+                flow.value = flow.value.copy(
+                    detect = X4Detect.Detected(
+                        label = result.status?.let { X4Found(settings.deviceName, addr).label } ?: key,
+                        address = addr,
+                        status = result.status ?: X4Status(""),
+                    ),
+                )
                 messages.trySend(X4Text.sent(result))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 val reason = e.message ?: "unreachable"
                 if (e !is X4Exception || !reason.startsWith("X4:")) {
-                    flow.value = flow.value.copy(detect = X4Detect.NotFound(url, reason))
+                    flow.value = flow.value.copy(detect = X4Detect.NotFound(key, reason))
                 }
                 messages.trySend("Not sent: $reason")
             } finally {
                 flow.value = flow.value.copy(sending = false)
-                lastProbeAt = System.currentTimeMillis(); lastProbeUrl = url
+                lastProbeAt = System.currentTimeMillis(); lastProbeKey = key
             }
         }
     }
