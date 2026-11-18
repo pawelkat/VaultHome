@@ -34,6 +34,21 @@ class MainActivity : ComponentActivity() {
             }
             pendingVault.value?.onVaultPicked(uri)
         }
+        // Event sync writes incoming notes into the vault, so it needs the tree grant with write access.
+        val pickVaultWritable = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val uri = result.data?.data ?: return@registerForActivityResult
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            } catch (_: SecurityException) {
+                return@registerForActivityResult
+            }
+            pendingVault.value?.onVaultPicked(uri)
+            val graph = (application as VaultHomeApp).graph
+            if (graph.eventSync.state.value.enabled) com.vaulthome.app.events.EventSyncService.start(this)
+        }
         val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             pendingVault.value?.startIndex()
         }
@@ -51,6 +66,20 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 pickVault.launch(intent)
+            }
+            val pickVaultTreeWritable = {
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                    addFlags(
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                            Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
+                    )
+                    (application as VaultHomeApp).graph.store.treeUri()?.let {
+                        putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, it)
+                    }
+                }
+                pickVaultWritable.launch(intent)
             }
             val startIndex = {
                 val needsNotification = Build.VERSION.SDK_INT >= 33 &&
@@ -71,6 +100,7 @@ class MainActivity : ComponentActivity() {
                     showSettings -> SettingsScreen(
                         viewModel = viewModel,
                         onPickVault = pickVaultTree,
+                        onGrantVaultWrite = pickVaultTreeWritable,
                         onBack = { showSettings = false },
                         askViewModel = askViewModel,
                     )
@@ -93,6 +123,9 @@ class MainActivity : ComponentActivity() {
         val graph = (application as VaultHomeApp).graph
         if (graph.x4Settings.server.value.enabled && !com.vaulthome.app.x4.mcp.X4McpService.state.value.running) {
             com.vaulthome.app.x4.mcp.X4McpService.start(this)
+        }
+        if (graph.eventSync.state.value.enabled && !com.vaulthome.app.events.EventSyncService.state.value.running) {
+            com.vaulthome.app.events.EventSyncService.start(this)
         }
     }
 

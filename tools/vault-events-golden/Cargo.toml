@@ -1,0 +1,13 @@
+[package]
+name = "ve-golden"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+vault-events = { path = "../../../VaultSearch/crates/vault-events" }
+serde_json = "1"
+base64 = "0.22"
+
+[workspace]

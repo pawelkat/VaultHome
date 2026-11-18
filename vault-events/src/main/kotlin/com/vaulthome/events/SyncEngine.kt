@@ -1,0 +1,246 @@
+package com.vaulthome.events
+
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
+
+/** What Settings shows about event sync. */
+data class EngineStatus(
+    val phase: Phase = Phase.STOPPED,
+    val mode: LinkMode? = null,
+    val routers: Int = 0,
+    val peers: Int = 0,
+    val tracked: Int = 0,
+    val published: Int = 0,
+    val applied: Int = 0,
+    val conflicts: Int = 0,
+    val lastEvent: String? = null,
+    val lastEventAtMs: Long? = null,
+    val lastError: String? = null,
+    val lastCatchUp: String? = null,
+) {
+    enum class Phase { STOPPED, CONNECTING, CONNECTED, ERROR }
+}
+
+data class EngineOptions(
+    val queryTimeoutMs: Long = 10_000,
+    val catchupIntervalMs: Long = 300_000,
+    /** No inotify over SAF: the local tree is polled (mtime+size, hash only on change). */
+    val rescanIntervalMs: Long = 60_000,
+    val linkCheckMs: Long = 5_000,
+    val retryMs: Long = 10_000,
+)
+
+/**
+ * Runs one [SyncCore] against one [EventLink] on a single worker thread, like the Rust agent's
+ * event loop: on start catch-up (remote first) then a full scan; then incoming samples, periodic
+ * catch-up, periodic rescans and a link check that catches up when the hub link comes back.
+ */
+class SyncEngine(
+    private val core: SyncCore,
+    private val config: LinkConfig,
+    private val openLink: (LinkConfig) -> EventLink,
+    private val options: EngineOptions = EngineOptions(),
+    private val onStatus: (EngineStatus) -> Unit = {},
+    /** Called on the worker after the vault tree changed (written, deleted or conflict copy). */
+    private val onVaultChanged: (List<String>) -> Unit = {},
+    private val log: (String) -> Unit = {},
+) {
+    private val worker: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
+        Thread(r, "vault-events").apply { isDaemon = true }
+    }
+    private val tasks = ArrayList<ScheduledFuture<*>>()
+    private var link: EventLink? = null
+    private var linked = 0
+    @Volatile private var stopped = false
+    @Volatile var status = EngineStatus(mode = config.mode)
+        private set
+
+    private fun update(f: (EngineStatus) -> EngineStatus) {
+        status = f(status).copy(tracked = core.state.entries.size)
+        onStatus(status)
+    }
+
+    fun start() {
+        update { it.copy(phase = EngineStatus.Phase.CONNECTING, lastError = null) }
+        worker.execute { connect() }
+    }
+
+    /** Ask for a rescan now (e.g. after VaultHome itself changed a file). */
+    fun pokeLocal(paths: Collection<String> = emptyList()) {
+        worker.execute {
+            guarded("local change") {
+                val b = if (paths.isEmpty()) core.scan() else core.localBatch(paths)
+                publishAll(b.publish)
+                core.saveIfDirty()
+            }
+        }
+    }
+
+    fun catchUpNow() = worker.execute { guarded("catch-up") { catchUp() } }
+
+    fun stop() {
+        stopped = true
+        worker.execute {
+            tasks.forEach { it.cancel(false) }
+            runCatching { core.saveIfDirty() }
+            runCatching { link?.close() }
+            link = null
+            update { it.copy(phase = EngineStatus.Phase.STOPPED, routers = 0, peers = 0) }
+        }
+        worker.shutdown()
+    }
+
+    fun awaitStopped(ms: Long) = worker.awaitTermination(ms, TimeUnit.MILLISECONDS)
+
+    /** Run [block] on the worker and wait (tests). */
+    fun <T> onWorker(block: (SyncCore) -> T): T = worker.submit<T> { block(core) }.get()
+
+    private fun connect() {
+        if (stopped) return
+        val l = try {
+            openLink(config)
+        } catch (e: Throwable) {
+            log("cannot open zenoh session ${config.mode.wire} ${config.connect}: ${e.message}; retrying")
+            update { it.copy(phase = EngineStatus.Phase.CONNECTING, lastError = "connect: ${e.message ?: e.javaClass.simpleName}") }
+            if (!stopped) worker.schedule({ connect() }, options.retryMs, TimeUnit.MILLISECONDS)
+            return
+        }
+        link = l
+        try {
+            l.subscribe { key, bytes -> if (!stopped) worker.execute { onSample(key, bytes) } }
+        } catch (e: Throwable) {
+            update { it.copy(phase = EngineStatus.Phase.ERROR, lastError = "subscribe: ${e.message}") }
+            return
+        }
+        linked = l.routerCount() + l.peerCount()
+        update { it.copy(phase = EngineStatus.Phase.CONNECTED, routers = l.routerCount(), peers = l.peerCount(), lastError = null) }
+        // Remote first, then local: incoming changes are applied before offline local edits go out.
+        guarded("catch-up") { catchUp() }
+        guarded("initial scan") {
+            val b = core.scan()
+            publishAll(b.publish)
+            core.saveIfDirty()
+            log("initial scan: published ${b.publish.size}")
+            core.lastScanRefused?.let { r -> update { it.copy(lastError = r) } }
+        }
+        tasks += worker.scheduleWithFixedDelay({ guarded("catch-up") { catchUp() } }, options.catchupIntervalMs, options.catchupIntervalMs, TimeUnit.MILLISECONDS)
+        tasks += worker.scheduleWithFixedDelay({
+            guarded("rescan") {
+                val b = core.scan()
+                publishAll(b.publish)
+                if (b.refusedDeletes.isNotEmpty()) {
+                    update { it.copy(lastError = "mass-delete guard: ${b.refusedDeletes.size} notes vanished at once; deletes not published") }
+                }
+                core.lastScanRefused?.let { r -> update { it.copy(lastError = r) } }
+                core.saveIfDirty()
+            }
+        }, options.rescanIntervalMs, options.rescanIntervalMs, TimeUnit.MILLISECONDS)
+        tasks += worker.scheduleWithFixedDelay({ guarded("link check") { linkCheck() } }, options.linkCheckMs, options.linkCheckMs, TimeUnit.MILLISECONDS)
+    }
+
+    private fun linkCheck() {
+        val l = link ?: return
+        val r = l.routerCount()
+        val p = l.peerCount()
+        val n = r + p
+        if (n > 0 && linked == 0) {
+            log("hub link up; catching up")
+            catchUp()
+        }
+        linked = n
+        if (r != status.routers || p != status.peers) update { it.copy(routers = r, peers = p) }
+    }
+
+    private fun onSample(key: String, bytes: ByteArray) {
+        val ev = try {
+            NoteEvent.decode(bytes, key)
+        } catch (e: DecodeException) {
+            log("dropping bad event on $key: ${e.message}")
+            update { it.copy(lastError = "bad event on $key: ${e.kind}") }
+            return
+        }
+        guarded("apply ${ev.path}") {
+            val a = core.onIncoming(ev)
+            if (a.changed) log("applied ${ev.path} v${ev.stamp.version} from ${ev.stamp.origin}")
+            if (a.changed || a.conflicts.isNotEmpty()) {
+                update {
+                    it.copy(
+                        applied = it.applied + if (a.changed) 1 else 0,
+                        conflicts = it.conflicts + a.conflicts.size,
+                        lastEvent = "${if (ev.stamp.deleted) "deleted" else "received"} ${ev.path} v${ev.stamp.version} from ${ev.stamp.origin}",
+                        lastEventAtMs = System.currentTimeMillis(),
+                    )
+                }
+                onVaultChanged(listOf(ev.path) + a.conflicts)
+            }
+            publishAll(a.publish)
+            core.saveIfDirty()
+        }
+    }
+
+    /** One catch-up pass against the hub (Rust `agent::catch_up`). Returns `false` if no hub answered. */
+    private fun catchUp(): Boolean {
+        val l = link ?: return false
+        val index = l.fetchIndex(options.queryTimeoutMs)
+        if (index == null) {
+            update { it.copy(lastCatchUp = "no hub answered the catch-up query") }
+            return false
+        }
+        val (fetch, republish) = core.planCatchup(index.stamps)
+        val byPath = index.stamps.associateBy { it.path }
+        var applied = 0
+        var conflicts = 0
+        var adopted = 0
+        val changed = ArrayList<String>()
+        for (p in fetch) {
+            val hubStamp = byPath[p]
+            if (hubStamp != null && core.adoptIfSame(hubStamp)) { adopted++; continue }
+            val ev = l.fetchNote(p, options.queryTimeoutMs)
+            if (ev == null) { log("catch-up: hub listed $p but returned nothing"); continue }
+            val a = core.onIncoming(ev)
+            if (a.changed) { applied++; changed += p }
+            conflicts += a.conflicts.size
+            changed += a.conflicts
+            publishAll(a.publish)
+        }
+        val out = republish.mapNotNull { core.republish(it) }
+        publishAll(out)
+        core.saveIfDirty()
+        val msg = "hub ${index.hub}: ${index.stamps.size} stored, fetched ${fetch.size - adopted}, adopted $adopted, applied $applied, conflicts $conflicts, republished ${out.size}"
+        log("catch-up from $msg")
+        update { it.copy(lastCatchUp = msg, applied = it.applied + applied, conflicts = it.conflicts + conflicts) }
+        if (changed.isNotEmpty()) onVaultChanged(changed)
+        return true
+    }
+
+    private fun publishAll(evs: List<NoteEvent>) {
+        val l = link ?: return
+        for (ev in evs) {
+            try {
+                l.publish(ev)
+                log("published ${ev.path} v${ev.stamp.version}${if (ev.stamp.deleted) " (delete)" else ""}")
+                update {
+                    it.copy(
+                        published = it.published + 1,
+                        lastEvent = "sent ${ev.path} v${ev.stamp.version}${if (ev.stamp.deleted) " (delete)" else ""}",
+                        lastEventAtMs = System.currentTimeMillis(),
+                    )
+                }
+            } catch (e: Throwable) {
+                log("publish ${ev.path} failed: ${e.message}")
+                update { it.copy(lastError = "publish ${ev.path}: ${e.message}") }
+            }
+        }
+    }
+
+    private inline fun guarded(what: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Throwable) {
+            log("$what failed: $e")
+            update { it.copy(lastError = "$what: ${e.message ?: e.javaClass.simpleName}") }
+        }
+    }
+}

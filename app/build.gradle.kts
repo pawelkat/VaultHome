@@ -20,7 +20,8 @@ android {
 
     defaultConfig {
         applicationId = "com.vaulthome.app"
-        minSdk = 28
+        // zenoh-kotlin-android 1.10.2 declares minSdk 30 (S24 Ultra runs Android 14+).
+        minSdk = 30
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
@@ -79,6 +80,10 @@ dependencies {
     implementation(libs.androidx.documentfile)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.litertlm.android)
+
+    // Vault event sync: pure-Kotlin port of VaultSearch vault-events + Zenoh transport (abiFilters keep arm64-v8a only).
+    implementation(project(":vault-events"))
+    implementation(libs.zenoh.kotlin.android)
 
     testImplementation(libs.junit)
     // Real org.json on the JVM (android.jar stubs throw) + MockWebServer standing in for Nitro llama-server.
