@@ -19,6 +19,8 @@ data class EngineStatus(
     val lastEventAtMs: Long? = null,
     val lastError: String? = null,
     val lastCatchUp: String? = null,
+    /** Endpoints actually dialled (local settings merged with the shared vault file). */
+    val connect: List<String> = emptyList(),
 ) {
     enum class Phase { STOPPED, CONNECTING, CONNECTED, ERROR }
 }
@@ -30,6 +32,8 @@ data class EngineOptions(
     val rescanIntervalMs: Long = 60_000,
     val linkCheckMs: Long = 5_000,
     val retryMs: Long = 10_000,
+    /** Live notes arriving within this window are posted together (one summary when many). */
+    val notifyDebounceMs: Long = 2_000,
 )
 
 /**
@@ -46,7 +50,15 @@ class SyncEngine(
     /** Called on the worker after the vault tree changed (written, deleted or conflict copy). */
     private val onVaultChanged: (List<String>) -> Unit = {},
     private val log: (String) -> Unit = {},
+    /** Called on the worker before each connect attempt; may extend the connect list (shared vault file). */
+    private val resolveConfig: (LinkConfig) -> LinkConfig = { it },
+    /** Called on the worker after the first catch-up of a session, before the initial scan publishes local changes. */
+    private val onConnected: (SyncCore) -> Unit = {},
+    /** "Synced notes" to post: remote changes only, grouped per [SyncNotices.plan]. Called on the worker. */
+    private val onNotices: (List<Notice>) -> Unit = {},
 ) {
+    private val pendingNotes = ArrayList<SyncedNote>()
+    private var notifyScheduled = false
     private val worker: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "vault-events").apply { isDaemon = true }
     }
@@ -99,10 +111,12 @@ class SyncEngine(
 
     private fun connect() {
         if (stopped) return
+        val cfg = try { resolveConfig(config) } catch (e: Throwable) { log("resolve config failed: $e"); config }
+        update { it.copy(connect = cfg.connect) }
         val l = try {
-            openLink(config)
+            openLink(cfg)
         } catch (e: Throwable) {
-            log("cannot open zenoh session ${config.mode.wire} ${config.connect}: ${e.message}; retrying")
+            log("cannot open zenoh session ${cfg.mode.wire} ${cfg.connect}: ${e.message}; retrying")
             update { it.copy(phase = EngineStatus.Phase.CONNECTING, lastError = "connect: ${e.message ?: e.javaClass.simpleName}") }
             if (!stopped) worker.schedule({ connect() }, options.retryMs, TimeUnit.MILLISECONDS)
             return
@@ -118,6 +132,7 @@ class SyncEngine(
         update { it.copy(phase = EngineStatus.Phase.CONNECTED, routers = l.routerCount(), peers = l.peerCount(), lastError = null) }
         // Remote first, then local: incoming changes are applied before offline local edits go out.
         guarded("catch-up") { catchUp() }
+        guarded("shared config") { onConnected(core) }
         guarded("initial scan") {
             val b = core.scan()
             publishAll(b.publish)
@@ -174,6 +189,7 @@ class SyncEngine(
                     )
                 }
                 onVaultChanged(listOf(ev.path) + a.conflicts)
+                queueNotes(SyncNotices.fromIncoming(ev, a, core.device))
             }
             publishAll(a.publish)
             core.saveIfDirty()
@@ -194,6 +210,7 @@ class SyncEngine(
         var conflicts = 0
         var adopted = 0
         val changed = ArrayList<String>()
+        val notes = ArrayList<SyncedNote>()
         for (p in fetch) {
             val hubStamp = byPath[p]
             if (hubStamp != null && core.adoptIfSame(hubStamp)) { adopted++; continue }
@@ -201,6 +218,7 @@ class SyncEngine(
             if (ev == null) { log("catch-up: hub listed $p but returned nothing"); continue }
             val a = core.onIncoming(ev)
             if (a.changed) { applied++; changed += p }
+            notes += SyncNotices.fromIncoming(ev, a, core.device)
             conflicts += a.conflicts.size
             changed += a.conflicts
             publishAll(a.publish)
@@ -212,7 +230,26 @@ class SyncEngine(
         log("catch-up from $msg")
         update { it.copy(lastCatchUp = msg, applied = it.applied + applied, conflicts = it.conflicts + conflicts) }
         if (changed.isNotEmpty()) onVaultChanged(changed)
+        postNotices(SyncNotices.plan(notes, catchUp = true))
         return true
+    }
+
+    private fun queueNotes(notes: List<SyncedNote>) {
+        if (notes.isEmpty() || stopped) return
+        pendingNotes += notes
+        if (notifyScheduled) return
+        notifyScheduled = true
+        worker.schedule({
+            notifyScheduled = false
+            val batch = pendingNotes.toList()
+            pendingNotes.clear()
+            postNotices(SyncNotices.plan(batch, catchUp = false))
+        }, options.notifyDebounceMs, TimeUnit.MILLISECONDS)
+    }
+
+    private fun postNotices(n: List<Notice>) {
+        if (n.isEmpty() || stopped) return
+        try { onNotices(n) } catch (e: Throwable) { log("notify failed: $e") }
     }
 
     private fun publishAll(evs: List<NoteEvent>) {

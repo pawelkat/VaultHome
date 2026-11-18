@@ -44,6 +44,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     askViewModel: com.vaulthome.app.ask.AskViewModel? = null,
     onGrantVaultWrite: () -> Unit = {},
+    onRequestNotifications: () -> Unit = {},
 ) {
     BackHandler(onBack = onBack)
     val home by viewModel.home.collectAsStateWithLifecycle()
@@ -97,7 +98,7 @@ fun SettingsScreen(
         }
         if (askViewModel != null) AskSettingsSection(askViewModel)
         X4SettingsSection()
-        EventSyncSection(onGrantVaultWrite)
+        EventSyncSection(onGrantVaultWrite, onRequestNotifications)
     }
 }
 

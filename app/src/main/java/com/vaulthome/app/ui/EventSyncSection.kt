@@ -38,7 +38,7 @@ private val Hint = Color(0xFF8A8A8A)
 
 /** Settings → Event sync: Zenoh client / peer / router for vault note events (off by default). */
 @Composable
-fun EventSyncSection(onGrantVaultWrite: () -> Unit) {
+fun EventSyncSection(onGrantVaultWrite: () -> Unit, onRequestNotifications: () -> Unit = {}) {
     val ctx = LocalContext.current
     val graph = (ctx.applicationContext as com.vaulthome.app.VaultHomeApp).graph
     val store = graph.eventSync
@@ -48,6 +48,9 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit) {
     var connect by remember { mutableStateOf(settings.connect.joinToString(", ")) }
     var listen by remember { mutableStateOf(settings.listen.joinToString(", ")) }
     var mode by remember { mutableStateOf(settings.mode) }
+    var tailnet by remember { mutableStateOf(settings.tailnetName) }
+    var notify by remember { mutableStateOf(settings.notifySynced) }
+    var useShared by remember { mutableStateOf(settings.useSharedEndpoints) }
     val writeGranted = remember(svc, settings) {
         val tree = graph.store.treeUri()
         tree != null && ctx.contentResolver.persistedUriPermissions.any { it.uri == tree && it.isWritePermission }
@@ -57,11 +60,15 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit) {
         connect = EventSyncSettings.parseList(connect),
         listen = EventSyncSettings.parseList(listen),
         mode = mode,
+        tailnetName = tailnet.trim(),
+        notifySynced = notify,
+        useSharedEndpoints = useShared,
     )
     val problem = draft.problem()
     val apply = { enabled: Boolean ->
         val next = draft.copy(enabled = enabled)
         store.update(next)
+        if (enabled && next.notifySynced) onRequestNotifications()
         if (enabled && next.problem() == null) EventSyncService.start(ctx) else EventSyncService.stop(ctx)
     }
 
@@ -89,11 +96,25 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit) {
     OutlinedTextField(
         value = connect,
         onValueChange = { connect = it },
-        label = { Text("Connect endpoint(s), comma separated", color = Muted) },
+        label = { Text("Connect endpoints (Zenoh connect list), comma separated", color = Muted) },
         singleLine = false,
         modifier = Modifier.fillMaxWidth(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
     )
+    Text(
+        "Defaults: note4, nitro5, Latitude and desktop-sdf3lgo on the tailnet. Hosts without a router just fail to dial " +
+            "and are retried. The Grok Bot box (grokbot-user-155710816) is not dialable: its hub connects out to a router, " +
+            "e.g. this phone in Router mode.",
+        color = Hint, style = MaterialTheme.typography.bodySmall,
+    )
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column2("Use shared endpoint list", "Read and update ${com.vaulthome.events.SharedEndpoints.PATH} in the vault: adds other devices' routers to the connect list and writes this phone's entry (device, mode, listen, Tailscale name, last seen).", Modifier.weight(1f))
+        Switch(checked = useShared, onCheckedChange = { useShared = it })
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column2("Notify synced notes", "One notification per note another device changed (one summary when many, e.g. catch-up). Tap opens the note.", Modifier.weight(1f))
+        Switch(checked = notify, onCheckedChange = { notify = it; if (it) onRequestNotifications() })
+    }
     Text("Mode", color = Ink)
     LinkMode.entries.forEach { m ->
         Row(
@@ -109,6 +130,16 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit) {
             value = listen,
             onValueChange = { listen = it },
             label = { Text("Listen endpoint", color = Muted) },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+        )
+    }
+    if (mode != LinkMode.CLIENT) {
+        OutlinedTextField(
+            value = tailnet,
+            onValueChange = { tailnet = it },
+            label = { Text("This phone's Tailscale name (advertised in the shared list)", color = Muted) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
@@ -139,9 +170,12 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit) {
         }
         OutlinedButton(onClick = {
             device = EventSyncSettings.DEFAULT_DEVICE
-            connect = EventSyncSettings.DEFAULT_CONNECT
+            connect = EventSyncSettings.DEFAULT_CONNECT_LIST.joinToString(", ")
             listen = EventSyncSettings.DEFAULT_LISTEN
             mode = LinkMode.CLIENT
+            tailnet = EventSyncSettings.DEFAULT_TAILNET_NAME
+            notify = true
+            useShared = true
         }) { Text("Defaults") }
     }
     Text(statusLine(settings.enabled, svc), color = Ink, style = MaterialTheme.typography.bodySmall)
@@ -163,8 +197,8 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit) {
 }
 
 @Composable
-private fun Column2(title: String, hint: String) {
-    androidx.compose.foundation.layout.Column(Modifier.padding(start = 8.dp)) {
+private fun Column2(title: String, hint: String, modifier: Modifier = Modifier) {
+    androidx.compose.foundation.layout.Column(modifier.padding(start = 8.dp)) {
         Text(title, color = Ink)
         Text(hint, color = Hint, style = MaterialTheme.typography.bodySmall)
     }

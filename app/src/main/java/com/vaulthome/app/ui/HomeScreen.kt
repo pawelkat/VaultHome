@@ -37,7 +37,15 @@ import java.time.LocalDate
 
 /** Landing page: the latest daily note in the note viewer (search overlay on top), or an empty state. */
 @Composable
-fun HomeScreen(viewModel: VaultHomeViewModel, onIndex: () -> Unit, onSettings: () -> Unit, onExit: () -> Unit) {
+fun HomeScreen(
+    viewModel: VaultHomeViewModel,
+    onIndex: () -> Unit,
+    onSettings: () -> Unit,
+    onExit: () -> Unit,
+    /** Note opened from a "Synced notes" notification; shown over the usual landing page until closed. */
+    requestedNote: String? = null,
+    onRequestedNoteClosed: () -> Unit = {},
+) {
     val context = LocalContext.current
     val index by viewModel.index.collectAsStateWithLifecycle()
     // Saveable so the first composition after Settings / recreation / process death goes straight to the note.
@@ -58,7 +66,9 @@ fun HomeScreen(viewModel: VaultHomeViewModel, onIndex: () -> Unit, onSettings: (
     val topBar: @Composable RowScope.() -> Unit = { SettingsAction(onSettings) }
     var opened by rememberSaveable { mutableStateOf<String?>(null) }
     val path = daily ?: opened
-    if (path != null) {
+    if (requestedNote != null) {
+        NoteScreen(path = requestedNote, viewModel = viewModel, onBack = onRequestedNoteClosed, actions = actions, topBar = topBar)
+    } else if (path != null) {
         NoteScreen(path = path, viewModel = viewModel, onBack = { if (daily == null) opened = null else onExit() }, actions = actions, topBar = topBar)
     } else {
         BackHandler(onBack = onExit)

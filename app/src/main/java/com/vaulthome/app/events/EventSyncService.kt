@@ -20,6 +20,8 @@ import com.vaulthome.app.MainActivity
 import com.vaulthome.app.R
 import com.vaulthome.app.VaultHomeApp
 import com.vaulthome.events.AgentState
+import com.vaulthome.events.Disk
+import com.vaulthome.events.SharedEndpoints
 import com.vaulthome.events.EngineStatus
 import com.vaulthome.events.LinkMode
 import com.vaulthome.events.SyncCore
@@ -108,25 +110,45 @@ class EventSyncService : Service() {
         val core = SyncCore(fs, settings.device, state, stateFile)
         runCatching { io.zenoh.Zenoh.initLogFromEnvOr("warn") }
         val link = settings.linkConfig()
-        val endpoint = when (settings.mode) {
-            LinkMode.CLIENT -> settings.connect.joinToString()
-            else -> "listen ${settings.listen.joinToString()}" + if (settings.connect.isNotEmpty()) ", connect ${settings.connect.joinToString()}" else ""
+        val notifier = SyncedNotesNotifier(this).also { it.ensureChannel() }
+        fun endpoint(connect: List<String>) = when (settings.mode) {
+            LinkMode.CLIENT -> connect.joinToString()
+            else -> "listen ${settings.listen.joinToString()}" + if (connect.isNotEmpty()) ", connect ${connect.joinToString()}" else ""
         }
         val e = SyncEngine(
             core = core,
             config = link,
             openLink = { ZenohLink.open(it) },
             onStatus = { st ->
-                mutable.value = EventSyncState(running = true, status = st, endpoint = endpoint)
+                mutable.value = EventSyncState(running = true, status = st, endpoint = endpoint(st.connect.ifEmpty { link.connect }))
                 notifyStatus(settings, st)
             },
             onVaultChanged = { g.reader.invalidate() },
             log = { Log.i(TAG, it) },
+            // Shared endpoint list in the vault: read before each connect, self entry merged after the first catch-up
+            // (so the hub's newer copy is applied first and other devices' entries are kept).
+            resolveConfig = { cfg ->
+                if (!settings.useSharedEndpoints) cfg else settings.linkConfig(SharedEndpoints.parse((fs.read(SharedEndpoints.PATH) as? Disk.Present)?.bytes))
+            },
+            onConnected = {
+                if (settings.useSharedEndpoints) {
+                    val disk = fs.read(SharedEndpoints.PATH)
+                    if (disk !is Disk.Skipped) {
+                        val next = SharedEndpoints.mergeSelf((disk as? Disk.Present)?.bytes, settings.selfEntry(), System.currentTimeMillis())
+                        if (next != null) {
+                            // Written like a local edit: the initial scan right after this publishes it.
+                            fs.writeAtomic(SharedEndpoints.PATH, next)
+                            Log.i(TAG, "shared endpoints: wrote ${settings.device} entry")
+                        }
+                    }
+                }
+            },
+            onNotices = { n -> if (settings.notifySynced) notifier.post(n) },
         )
         engine = e
         running = settings
         if (settings.mode == LinkMode.ROUTER) acquireWakeLock() else releaseWakeLock()
-        mutable.value = EventSyncState(running = true, status = e.status, endpoint = endpoint)
+        mutable.value = EventSyncState(running = true, status = e.status, endpoint = endpoint(link.connect))
         e.start()
     }
 

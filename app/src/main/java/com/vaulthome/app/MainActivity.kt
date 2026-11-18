@@ -52,10 +52,22 @@ class MainActivity : ComponentActivity() {
         val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             pendingVault.value?.startIndex()
         }
+        // "Synced notes" notifications (Settings → Event sync); the answer is read back by the notifier.
+        val askSyncNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+        val requestSyncNotifications = {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                askSyncNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        openNote.value = intent?.getStringExtra(EXTRA_OPEN_NOTE)
         setContent {
             val viewModel: VaultHomeViewModel = viewModel()
             pendingVault.value = viewModel
             var showSettings by rememberSaveable { mutableStateOf(false) }
+            val requested = openNote.value
+            androidx.compose.runtime.LaunchedEffect(requested) { if (requested != null) showSettings = false }
             val askViewModel: com.vaulthome.app.ask.AskViewModel = viewModel()
             val pickVaultTree = {
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
@@ -101,6 +113,7 @@ class MainActivity : ComponentActivity() {
                         viewModel = viewModel,
                         onPickVault = pickVaultTree,
                         onGrantVaultWrite = pickVaultTreeWritable,
+                        onRequestNotifications = requestSyncNotifications,
                         onBack = { showSettings = false },
                         askViewModel = askViewModel,
                     )
@@ -110,6 +123,8 @@ class MainActivity : ComponentActivity() {
                             onIndex = startIndex,
                             onSettings = { showSettings = true },
                             onExit = { finish() },
+                            requestedNote = requested,
+                            onRequestedNoteClosed = { openNote.value = null },
                         )
                     }
                 }
@@ -129,5 +144,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getStringExtra(EXTRA_OPEN_NOTE)?.let { openNote.value = it }
+    }
+
     private val pendingVault = androidx.compose.runtime.mutableStateOf<VaultHomeViewModel?>(null)
+
+    /** Note to open from a "Synced notes" notification (vault-relative path). */
+    private val openNote = androidx.compose.runtime.mutableStateOf<String?>(null)
+
+    companion object {
+        const val EXTRA_OPEN_NOTE = "com.vaulthome.app.extra.OPEN_NOTE"
+    }
 }
