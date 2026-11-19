@@ -119,7 +119,8 @@ class EventSyncService : Service() {
         val e = SyncEngine(
             core = core,
             config = link,
-            openLink = { ZenohLink.open(it) },
+            // Identity: `from=<device>` on every query, `vault/presence/<device>` with this build.
+            openLink = { ZenohLink.open(it.copy(device = settings.device, build = BUILD)) },
             // Large files: partial chunk downloads live in the app cache, never in the SAF vault tree.
             options = EngineOptions(partialDir = File(cacheDir, "vault-events-partial")),
             onStatus = { st ->
@@ -233,6 +234,8 @@ class EventSyncService : Service() {
     }
 
     companion object {
+        /** `vaulthome <versionName>+<git sha>` for the presence reply. */
+        val BUILD = "vaulthome ${com.vaulthome.app.BuildConfig.VERSION_NAME}+${com.vaulthome.app.BuildConfig.GIT_SHA}"
         private const val TAG = "EventSync"
         const val CHANNEL_ID = "vault_events"
         private const val NOTIFICATION_ID = 4005

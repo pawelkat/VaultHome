@@ -110,6 +110,7 @@ class SyncEngine(
     fun catchUpNow() = worker.execute { guarded("catch-up") { catchUp() } }
 
     fun stop() {
+        if (stopped) return
         stopped = true
         worker.execute {
             tasks.forEach { it.cancel(false) }
@@ -129,7 +130,8 @@ class SyncEngine(
 
     private fun connect() {
         if (stopped) return
-        val cfg = try { resolveConfig(config) } catch (e: Throwable) { log("resolve config failed: $e"); config }
+        val resolved = try { resolveConfig(config) } catch (e: Throwable) { log("resolve config failed: $e"); config }
+        val cfg = if (resolved.device.isBlank()) resolved.copy(device = core.device) else resolved
         update { it.copy(connect = cfg.connect) }
         val l = try {
             openLink(cfg)
@@ -147,7 +149,7 @@ class SyncEngine(
             return
         }
         try {
-            l.serveBlobs(core.device) { sha, i, cs -> outgoing.chunk(sha, i, cs) }
+            l.serveBlobs(core.device, { sha, i, cs -> outgoing.chunk(sha, i, cs) }, { outgoing.label(it) }, log)
         } catch (e: Throwable) {
             log("serving blobs failed: $e")
         }
@@ -350,7 +352,7 @@ class SyncEngine(
             try {
                 val t = options.transfer
                 val ref = ev.toBlobRef(t.inlineMax, t.chunkSize)
-                if (ref != null) outgoing.insert(ev.stamp.sha256, ev.content!!)
+                if (ref != null) outgoing.insert(ev.stamp.sha256, ev.content!!, ev.path)
                 l.publish(ref ?: ev)
                 val b = ref?.blob
                 log(publishedLine(ev) + if (b != null) " as blob (${b.size} B, ${b.chunks} chunks of ${b.chunkSize} B, sha256 ${ev.stamp.sha256.take(12)})" else "")

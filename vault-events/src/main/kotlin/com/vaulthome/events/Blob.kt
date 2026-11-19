@@ -105,14 +105,14 @@ data class TransferOptions(
  * them. Bounded by total bytes and age. Thread-safe (served from a Zenoh callback thread).
  */
 class OutgoingCache(private val maxBytes: Long = 64L shl 20, private val ttlMs: Long = 30 * 60_000L, private val now: () -> Long = System::currentTimeMillis) {
-    private data class Entry(val sha: String, val bytes: ByteArray, val at: Long)
+    private data class Entry(val sha: String, val bytes: ByteArray, val at: Long, val path: String?)
 
     private val q = ArrayDeque<Entry>()
 
     @Synchronized
-    fun insert(sha: String, bytes: ByteArray) {
+    fun insert(sha: String, bytes: ByteArray, path: String? = null) {
         q.removeIf { it.sha == sha }
-        q.addLast(Entry(sha, bytes, now()))
+        q.addLast(Entry(sha, bytes, now(), path))
         var total = q.sumOf { it.bytes.size.toLong() }
         while (total > maxBytes && q.size > 1) total -= q.removeFirst().bytes.size
     }
@@ -125,6 +125,10 @@ class OutgoingCache(private val maxBytes: Long = 64L shl 20, private val ttlMs: 
     }
 
     fun chunk(sha: String, i: Long, chunkSize: Long): ByteArray? = get(sha)?.let { Blob.slice(it, i, chunkSize) }
+
+    /** Size and vault path of a cached blob (for the served-blob summary line). */
+    @Synchronized
+    fun label(sha: String): BlobLabel? = q.firstOrNull { it.sha == sha }?.let { BlobLabel(it.bytes.size.toLong(), it.path) }
 
     @get:Synchronized val size: Int get() = q.size
 }

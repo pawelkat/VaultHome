@@ -23,6 +23,7 @@ class SyncEngineTest {
         var puts = 0
         var maxPut = 0
         var chunkRequests = 0
+        val configs = CopyOnWriteArrayList<LinkConfig>()
 
         fun link() = object : EventLink {
             override fun subscribe(onSample: (String, ByteArray) -> Unit) { subs += onSample }
@@ -39,7 +40,12 @@ class SyncEngineTest {
             override fun fetchNote(path: String, timeoutMs: Long) = synchronized(this@Bus) { stored[path] }
             override fun routerCount() = 1
             override fun peerCount() = 0
-            override fun serveBlobs(device: String, provider: (String, Long, Long) -> ByteArray?) { blobServers += device to provider }
+            override fun serveBlobs(
+                device: String,
+                provider: (String, Long, Long) -> ByteArray?,
+                describe: (String) -> BlobLabel?,
+                log: (String) -> Unit,
+            ) { blobServers += device to provider }
             override fun fetchChunk(sha: String, index: Long, chunkSize: Long, timeoutMs: Long, src: String): ByteArray? {
                 synchronized(this@Bus) { chunkRequests++ }
                 return blobServers.filter { Blob.agentAnswers(it.first, src) }.firstNotNullOfOrNull { it.second(sha, index, chunkSize) }
@@ -51,7 +57,7 @@ class SyncEngineTest {
     private fun engine(bus: Bus, dir: File, dev: String) = SyncEngine(
         SyncCore(FileVaultTree(dir), dev, AgentState(dev, dir.path)),
         LinkConfig(LinkMode.CLIENT, listOf("tcp/127.0.0.1:1")),
-        openLink = { bus.link() },
+        openLink = { bus.configs += it; bus.link() },
         options = EngineOptions(
             rescanIntervalMs = 100, catchupIntervalMs = 60_000, linkCheckMs = 1_000,
             partialDir = File(tmp.root, "partial-$dev"),
@@ -64,6 +70,17 @@ class SyncEngineTest {
             check(System.currentTimeMillis() < end) { "timed out" }
             Thread.sleep(20)
         }
+    }
+
+    @Test
+    fun linkOpensWithDeviceIdentity() {
+        val bus = Bus()
+        val e = engine(bus, tmp.newFolder("id"), "s24")
+        e.start()
+        waitFor { bus.configs.isNotEmpty() && bus.blobServers.isNotEmpty() }
+        assertEquals("s24", bus.configs.first().device)
+        assertEquals("s24", bus.blobServers.first().first)
+        e.stop(); e.awaitStopped(5_000)
     }
 
     @Test

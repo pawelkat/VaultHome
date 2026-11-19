@@ -13,6 +13,14 @@ kotlin {
     }
 }
 
+// Git short sha of the checkout, shown in the presence reply (`vaulthome 0.1.0+abc1234`).
+val gitSha: String = runCatching {
+    providers.exec {
+        commandLine("git", "rev-parse", "--short=7", "HEAD")
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim()
+}.getOrDefault("").ifEmpty { "unknown" }
+
 android {
     testOptions { unitTests { isIncludeAndroidResources = true } }
     namespace = "com.vaulthome.app"
@@ -25,6 +33,7 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -48,6 +57,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {

@@ -9,6 +9,10 @@ data class LinkConfig(
     val connect: List<String>,
     /** Endpoints to listen on (peer/router), e.g. `tcp/0.0.0.0:7447`. */
     val listen: List<String> = emptyList(),
+    /** This device: sent as `from=` on every query and announced as `vault/presence/<device>`; blank = neither. */
+    val device: String = "",
+    /** Build string in the presence reply, e.g. `vaulthome 0.1.0+abc1234`. */
+    val build: String = "",
 ) {
     /**
      * Session config as `(key, json5)` inserts, same keys as Rust `net::router_config` /
@@ -50,9 +54,15 @@ interface EventLink : AutoCloseable {
     /**
      * Answer chunk queries on [Blob.WILDCARD] addressed to [device] (or `any` / no `src`) with [provider]
      * `(sha256, index, chunkSize) -> bytes or null`, on a transport thread (never behind the worker).
-     * Default: not served.
+     * [describe] gives a blob's size and path; [log] gets one `served blob ... to <requester>` line per
+     * transfer. Default: not served.
      */
-    fun serveBlobs(device: String, provider: (String, Long, Long) -> ByteArray?) {}
+    fun serveBlobs(
+        device: String,
+        provider: (String, Long, Long) -> ByteArray?,
+        describe: (String) -> BlobLabel? = { null },
+        log: (String) -> Unit = {},
+    ) {}
 
     /**
      * One chunk of blob [sha] from the server named [src] (`hub`, a device, `any`); `null` = nobody answered

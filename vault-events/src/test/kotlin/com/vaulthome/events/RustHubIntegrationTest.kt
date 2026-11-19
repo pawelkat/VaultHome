@@ -22,6 +22,7 @@ class RustHubIntegrationTest {
     private val bin = System.getenv("VAULT_EVENTS_BIN").orEmpty()
     private val procs = ArrayList<Process>()
     private val engines = ArrayList<SyncEngine>()
+    private val engineLog = java.util.concurrent.CopyOnWriteArrayList<String>()
 
     @After
     fun tearDown() {
@@ -47,7 +48,7 @@ class RustHubIntegrationTest {
                 rescanIntervalMs = 300, linkCheckMs = 500, retryMs = 500, queryTimeoutMs = 3_000,
                 partialDir = File(tmp.root, "partial-$dev"),
             ),
-            log = { println("[$dev] $it") },
+            log = { println("[$dev] $it"); engineLog += "[$dev] $it" },
         )
         engines += e
         e.start()
@@ -79,7 +80,7 @@ class RustHubIntegrationTest {
         }
         rust("agent", "agent", "--vault", a.path, "--device", "box", "--state-dir", tmp.newFolder("as").path, "--connect", ep, "--debounce-ms", "200")
         val b = tmp.newFolder("b")
-        val eb = kotlinEngine(b, "s24", LinkConfig(LinkMode.CLIENT, listOf(ep)))
+        val eb = kotlinEngine(b, "s24", LinkConfig(LinkMode.CLIENT, listOf(ep), build = "vaulthome test+0000000"))
 
         // Catch-up from Rust hub storage (or live): all three notes land in the Kotlin vault.
         waitFor("catch-up to Kotlin") { File(b, "Notes/C# and \$HOME ?*%.md").isFile && File(b, "Daily/2026-11-18.md").isFile && File(b, "Notes/Rust one.md").isFile }
@@ -139,6 +140,38 @@ class RustHubIntegrationTest {
         b.put("Notes/after photos.md", "still linked\n")
         waitFor("note after photos reaches Rust agent") { File(a, "Notes/after photos.md").isFile }
         assertTrue(File(b, "Daily").listFiles()!!.none { it.name.contains("(conflict ") })
+
+        // Requester identity: the hub names s24 (from=) in its catch-up and served-blob lines, and sees its
+        // presence token with the build string.
+        val boxSha = sha256Hex(fromBox).take(12)
+        waitFor("hub logs s24 by name") {
+            val h = File(tmp.root, "hub.log").readText()
+            h.contains("device online: s24") && h.contains("device s24: vaulthome vaulthome test+0000000") &&
+                h.contains(Regex("catch-up from s24: \\d+ listed"))
+        }
+        // 3 MB = 12 chunks to s24, served by the hub (or the box agent if the hub was still pulling).
+        waitFor("one served-blob summary for s24", 40_000) {
+            (File(tmp.root, "hub.log").readText() + File(tmp.root, "agent.log").readText())
+                .contains(Regex("served blob $boxSha \\(Daily/box photo.jpg\\) to s24: 12/12 chunks, 3000000 B in [0-9.]+ s"))
+        }
+        // s24 served its own photo to the hub (from=hub): one summary line on the Kotlin side.
+        val s24Sha = sha256Hex(fromS24).take(12)
+        waitFor("Kotlin serve summary") {
+            engineLog.any { it.contains(Regex("\\[s24\\] served blob $s24Sha \\(Daily/s24 photo.jpg\\) to hub: 10/10 chunks, 2500000 B")) }
+        }
+        assertTrue(engineLog.none { it.contains("to unknown") })
+        val hubLog2 = File(tmp.root, "hub.log").readText()
+        assertTrue(hubLog2, hubLog2.contains("device online: box"))
+        assertTrue("no per-chunk info lines", !hubLog2.contains("(chunk 0)"))
+        // `vault-events peers` lists both, with builds.
+        val peers = ProcessBuilder(bin, "peers", "--connect", ep).redirectErrorStream(true).start()
+        val out = peers.inputStream.bufferedReader().readText().also { peers.waitFor() }
+        println(out)
+        assertTrue(out, out.contains(Regex("s24\\s+online .*vaulthome vaulthome test\\+0000000")))
+        assertTrue(out, out.contains(Regex("box\\s+online .*agent vault-events ")))
+        // s24 leaves: the hub sees the token go.
+        eb.stop(); eb.awaitStopped(5_000)
+        waitFor("device offline: s24") { File(tmp.root, "hub.log").readText().contains("device offline: s24") }
     }
 
     @Test
