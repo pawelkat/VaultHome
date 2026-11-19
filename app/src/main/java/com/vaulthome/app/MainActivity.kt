@@ -34,13 +34,40 @@ class MainActivity : ComponentActivity() {
             }
             pendingVault.value?.onVaultPicked(uri)
         }
+        // Event sync writes incoming notes into the vault, so it needs the tree grant with write access.
+        val pickVaultWritable = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val uri = result.data?.data ?: return@registerForActivityResult
+            try {
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+                )
+            } catch (_: SecurityException) {
+                return@registerForActivityResult
+            }
+            pendingVault.value?.onVaultPicked(uri)
+            val graph = (application as VaultHomeApp).graph
+            if (graph.eventSync.state.value.enabled) com.vaulthome.app.events.EventSyncService.start(this)
+        }
         val askNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
             pendingVault.value?.startIndex()
         }
+        // "Synced notes" notifications (Settings → Event sync); the answer is read back by the notifier.
+        val askSyncNotifications = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+        val requestSyncNotifications = {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                askSyncNotifications.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        openNote.value = intent?.getStringExtra(EXTRA_OPEN_NOTE)
         setContent {
             val viewModel: VaultHomeViewModel = viewModel()
             pendingVault.value = viewModel
             var showSettings by rememberSaveable { mutableStateOf(false) }
+            val requested = openNote.value
+            androidx.compose.runtime.LaunchedEffect(requested) { if (requested != null) showSettings = false }
             val askViewModel: com.vaulthome.app.ask.AskViewModel = viewModel()
             val pickVaultTree = {
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
@@ -51,6 +78,20 @@ class MainActivity : ComponentActivity() {
                     )
                 }
                 pickVault.launch(intent)
+            }
+            val pickVaultTreeWritable = {
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                    addFlags(
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                            Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
+                    )
+                    (application as VaultHomeApp).graph.store.treeUri()?.let {
+                        putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, it)
+                    }
+                }
+                pickVaultWritable.launch(intent)
             }
             val startIndex = {
                 val needsNotification = Build.VERSION.SDK_INT >= 33 &&
@@ -71,6 +112,8 @@ class MainActivity : ComponentActivity() {
                     showSettings -> SettingsScreen(
                         viewModel = viewModel,
                         onPickVault = pickVaultTree,
+                        onGrantVaultWrite = pickVaultTreeWritable,
+                        onRequestNotifications = requestSyncNotifications,
                         onBack = { showSettings = false },
                         askViewModel = askViewModel,
                     )
@@ -80,6 +123,8 @@ class MainActivity : ComponentActivity() {
                             onIndex = startIndex,
                             onSettings = { showSettings = true },
                             onExit = { finish() },
+                            requestedNote = requested,
+                            onRequestedNoteClosed = { openNote.value = null },
                         )
                     }
                 }
@@ -94,7 +139,23 @@ class MainActivity : ComponentActivity() {
         if (graph.x4Settings.server.value.enabled && !com.vaulthome.app.x4.mcp.X4McpService.state.value.running) {
             com.vaulthome.app.x4.mcp.X4McpService.start(this)
         }
+        if (graph.eventSync.state.value.enabled && !com.vaulthome.app.events.EventSyncService.state.value.running) {
+            com.vaulthome.app.events.EventSyncService.start(this)
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getStringExtra(EXTRA_OPEN_NOTE)?.let { openNote.value = it }
     }
 
     private val pendingVault = androidx.compose.runtime.mutableStateOf<VaultHomeViewModel?>(null)
+
+    /** Note to open from a "Synced notes" notification (vault-relative path). */
+    private val openNote = androidx.compose.runtime.mutableStateOf<String?>(null)
+
+    companion object {
+        const val EXTRA_OPEN_NOTE = "com.vaulthome.app.extra.OPEN_NOTE"
+    }
 }

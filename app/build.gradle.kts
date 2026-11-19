@@ -13,6 +13,14 @@ kotlin {
     }
 }
 
+// Git short sha of the checkout, shown in the presence reply (`vaulthome 0.1.0+abc1234`).
+val gitSha: String = runCatching {
+    providers.exec {
+        commandLine("git", "rev-parse", "--short=7", "HEAD")
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim()
+}.getOrDefault("").ifEmpty { "unknown" }
+
 android {
     testOptions { unitTests { isIncludeAndroidResources = true } }
     namespace = "com.vaulthome.app"
@@ -20,10 +28,12 @@ android {
 
     defaultConfig {
         applicationId = "com.vaulthome.app"
-        minSdk = 28
+        // zenoh-kotlin-android 1.10.2 declares minSdk 30 (S24 Ultra runs Android 14+).
+        minSdk = 30
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "GIT_SHA", "\"$gitSha\"")
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -47,6 +57,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     packaging {
@@ -79,6 +90,10 @@ dependencies {
     implementation(libs.androidx.documentfile)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.litertlm.android)
+
+    // Vault event sync: pure-Kotlin port of VaultSearch vault-events + Zenoh transport (abiFilters keep arm64-v8a only).
+    implementation(project(":vault-events"))
+    implementation(libs.zenoh.kotlin.android)
 
     testImplementation(libs.junit)
     // Real org.json on the JVM (android.jar stubs throw) + MockWebServer standing in for Nitro llama-server.
