@@ -147,7 +147,7 @@ class SyncEngine(
             return
         }
         try {
-            l.serveBlobs { sha, i, cs -> outgoing.chunk(sha, i, cs) }
+            l.serveBlobs(core.device) { sha, i, cs -> outgoing.chunk(sha, i, cs) }
         } catch (e: Throwable) {
             log("serving blobs failed: $e")
         }
@@ -207,7 +207,7 @@ class SyncEngine(
         applyIncoming(ev)
     }
 
-    private fun fetcher(l: EventLink) = BlobFetcher(partialDir, options.transfer, { sha, i, cs -> l.fetchChunk(sha, i, cs, options.transfer.chunkTimeoutMs) })
+    private fun fetcher(l: EventLink) = BlobFetcher(partialDir, options.transfer, { sha, i, cs, src -> l.fetchChunk(sha, i, cs, options.transfer.chunkTimeoutMs, src) })
 
     /** Pull the bytes of blob reference [ev] off the worker, then apply the verified event on the worker. */
     private fun fetchThenApply(ev: NoteEvent) {

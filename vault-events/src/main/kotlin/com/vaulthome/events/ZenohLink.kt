@@ -20,6 +20,7 @@ import io.zenoh.sample.Sample
 import java.time.Duration
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * [EventLink] over zenoh-kotlin 1.10.2 (same Zenoh release as the box hub). Mirrors Rust `net.rs`:
@@ -72,13 +73,15 @@ class ZenohLink private constructor(private val session: Session) : EventLink {
         return best
     }
 
-    override fun serveBlobs(provider: (String, Long, Long) -> ByteArray?) {
+    override fun serveBlobs(device: String, provider: (String, Long, Long) -> ByteArray?) {
         val ke = KeyExpr.tryFrom(Blob.WILDCARD).getOrThrow()
         blobQueryable = session.declareQueryable(ke, Callback<Query> { q ->
             q.use {
+                val params = it.parameters
+                if (!Blob.agentAnswers(device, runCatching { params?.get("src") }.getOrNull())) return@use
                 val k = it.keyExpr.toString()
                 val (sha, i) = Blob.parseKey(k) ?: return@use
-                val cs = Blob.chunkSizeParam(runCatching { it.parameters?.get("cs") }.getOrNull())
+                val cs = Blob.chunkSizeParam(runCatching { params?.get("cs") }.getOrNull())
                 val bytes = runCatching { provider(sha, i, cs) }.getOrNull() ?: return@use
                 it.reply(it.keyExpr, ZBytes.from(bytes))
             }
@@ -86,29 +89,30 @@ class ZenohLink private constructor(private val session: Session) : EventLink {
     }
 
     /**
-     * One chunk: best-matching queryable first, then all (the hub may not have pulled the blob yet while the
-     * sender still has it). Low priority and DROP congestion control; replies inherit both.
+     * One chunk from the server named [src]: target ALL, priority DATA_LOW, congestion control BLOCK (replies
+     * inherit both, so a reply crossing a slow router is not dropped). Returns on the first non-empty reply;
+     * the query's final message (or its timeout) only matters when nobody has the chunk.
      */
-    override fun fetchChunk(sha: String, index: Long, chunkSize: Long, timeoutMs: Long): ByteArray? {
-        for (target in listOf(QueryTarget.BEST_MATCHING, QueryTarget.ALL)) {
-            var out: ByteArray? = null
-            val done = CountDownLatch(1)
-            val sel = Selector.tryFrom(Blob.selector(sha, index, chunkSize)).getOrThrow()
-            session.get(
-                sel,
-                callback = Callback<Reply> { r ->
-                    r.result.onSuccess { s -> synchronized(this) { if (out == null) out = s.payload.toBytes().takeIf { it.isNotEmpty() } } }
-                },
-                timeout = Duration.ofMillis(timeoutMs),
-                target = target,
-                consolidation = ConsolidationMode.NONE,
-                onClose = { done.countDown() },
-                qos = QoS(congestionControl = CongestionControl.DROP, priority = Priority.DATA_LOW),
-            ).getOrThrow()
-            done.await(timeoutMs + 2_000, TimeUnit.MILLISECONDS)
-            synchronized(this) { out }?.let { return it }
-        }
-        return null
+    override fun fetchChunk(sha: String, index: Long, chunkSize: Long, timeoutMs: Long, src: String): ByteArray? {
+        val out = AtomicReference<ByteArray?>(null)
+        val done = CountDownLatch(1)
+        val sel = Selector.tryFrom(Blob.selector(sha, index, chunkSize, src)).getOrThrow()
+        session.get(
+            sel,
+            callback = Callback<Reply> { r ->
+                r.result.onSuccess { s ->
+                    val b = s.payload.toBytes()
+                    if (b.isNotEmpty() && out.compareAndSet(null, b)) done.countDown()
+                }
+            },
+            timeout = Duration.ofMillis(timeoutMs),
+            target = QueryTarget.ALL,
+            consolidation = ConsolidationMode.NONE,
+            onClose = { done.countDown() },
+            qos = QoS(congestionControl = CongestionControl.BLOCK, priority = Priority.DATA_LOW),
+        ).getOrThrow()
+        done.await(timeoutMs + 1_000, TimeUnit.MILLISECONDS)
+        return out.get()
     }
 
     override fun routerCount(): Int = session.info().routersZid().getOrNull()?.size ?: 0

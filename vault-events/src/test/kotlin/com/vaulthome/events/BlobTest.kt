@@ -32,6 +32,45 @@ class BlobTest {
         assertEquals(Blob.MIN_CHUNK_SIZE, Blob.chunkSizeParam("1"))
         assertEquals(Blob.DEFAULT_CHUNK_SIZE, Blob.chunkSizeParam(null))
         assertEquals("vault/blob/$sha/0?cs=4096", Blob.selector(sha, 0, 4096))
+        assertEquals("vault/blob/$sha/3?cs=4096;src=hub", Blob.selector(sha, 3, 4096, Blob.SRC_HUB))
+    }
+
+    @Test
+    fun srcNamesOneServer() {
+        // Older receivers send no src: everyone answers, as before.
+        assertTrue(Blob.agentAnswers("s24", null))
+        assertTrue(Blob.agentAnswers("s24", "any"))
+        assertTrue(Blob.agentAnswers("s24", "s24"))
+        assertFalse(Blob.agentAnswers("s24", "hub"))
+        assertFalse(Blob.agentAnswers("s24", "towerx"))
+        assertEquals(listOf("hub", "towerx", "any"), Blob.sources("towerx"))
+    }
+
+    @Test
+    fun fetchKeepsChunksInFlightAndSticksToTheSourceThatAnswered() {
+        val b = data(40_000)
+        val info = BlobInfo.of(b.size.toLong(), 4096) // 10 chunks
+        val now = java.util.concurrent.atomic.AtomicInteger()
+        val peak = java.util.concurrent.atomic.AtomicInteger()
+        val asked = java.util.Collections.synchronizedList(ArrayList<String>())
+        val f = BlobFetcher(tmp.root.resolve("p1"), TransferOptions(backoffMs = 1), { _, i, cs, src ->
+            asked += src
+            val n = now.incrementAndGet()
+            peak.accumulateAndGet(n) { a, c -> maxOf(a, c) }
+            Thread.sleep(20)
+            now.decrementAndGet()
+            // Only the publishing device has it (the hub has not pulled it yet).
+            if (src == "towerx") Blob.slice(b, i, cs) else null
+        }, sleep = {})
+        val t0 = System.currentTimeMillis()
+        val got = f.fetch(sha256Hex(b), info, Blob.sources("towerx"))
+        assertArrayEquals(b, got.bytes)
+        assertEquals(4, peak.get())
+        assertTrue("pipelined", System.currentTimeMillis() - t0 < 1_000)
+        // At most the first wave asked the hub; the rest went straight to towerx; nobody asked `any`.
+        assertTrue(asked.count { it == "hub" } <= 4)
+        assertEquals(10, asked.count { it == "towerx" })
+        assertFalse(asked.contains("any"))
     }
 
     @Test
@@ -58,6 +97,7 @@ class BlobTest {
         val asked = ArrayList<Long>()
         val fail = HashMap<Long, Int>()
         val corrupt = HashMap<Long, Int>()
+        @Synchronized
         fun chunk(i: Long, cs: Long): ByteArray? {
             asked += i
             fail[i]?.let { if (it > 0) { fail[i] = it - 1; return null } }
@@ -68,7 +108,7 @@ class BlobTest {
     }
 
     private fun fetcher(f: Fake, rounds: Int = 8) =
-        BlobFetcher(tmp.root.resolve("partial"), TransferOptions(rounds = rounds, backoffMs = 1), { _, i, cs -> f.chunk(i, cs) }, sleep = {})
+        BlobFetcher(tmp.root.resolve("partial"), TransferOptions(rounds = rounds, backoffMs = 1), { _, i, cs, _ -> f.chunk(i, cs) }, sleep = {})
 
     @Test
     fun fetchRetriesOnlyMissingChunks() {
@@ -77,7 +117,8 @@ class BlobTest {
         val got = fetcher(f).fetch(sha256Hex(b), BlobInfo.of(b.size.toLong(), 4096))
         assertArrayEquals(b, got.bytes)
         assertEquals(2, got.retries)
-        assertEquals(listOf(0L, 1L, 2L, 3L, 3L, 3L, 4L), f.asked)
+        // 0,1,2,4 once; 3 three times (the other chunks do not wait for it).
+        assertEquals(listOf(0L, 1L, 2L, 3L, 3L, 3L, 4L), f.asked.sorted())
     }
 
     @Test
@@ -89,13 +130,13 @@ class BlobTest {
             fetcher(f1, rounds = 2).fetch(sha256Hex(b), info)
             fail("should give up")
         } catch (e: BlobFetchException) {
-            assertTrue(e.message!!, e.message!!.contains("2/5"))
+            assertTrue(e.message!!, e.message!!.contains("4/5"))
         }
         val f2 = Fake(b)
         val got = fetcher(f2).fetch(sha256Hex(b), info)
         assertArrayEquals(b, got.bytes)
-        assertEquals(2, got.resumed)
-        assertEquals(listOf(2L, 3L, 4L), f2.asked)
+        assertEquals(4, got.resumed)
+        assertEquals(listOf(2L), f2.asked)
     }
 
     @Test

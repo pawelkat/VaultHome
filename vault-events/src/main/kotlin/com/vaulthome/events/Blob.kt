@@ -3,15 +3,22 @@ package com.vaulthome.events
 import java.io.File
 import java.io.RandomAccessFile
 import java.util.ArrayDeque
+import java.util.concurrent.ExecutorCompletionService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Chunked transfer of files above the inline limit (Rust `blob.rs`).
  *
  * A live event for a file larger than [TransferOptions.inlineMax] carries no `content`, only a [BlobInfo]
  * next to the stamp (whose `sha256` is the whole file's). Bytes are pulled with Zenoh queries on
- * `vault/blob/<sha256>/<index>?cs=<chunk_size>`, answered by the hub (blob store) and by the sender (its
- * [OutgoingCache]). Queries ask for low priority and congestion-control DROP; replies inherit both, so a
- * photo never blocks note events. A dropped reply is just a missing chunk that is asked for again.
+ * `vault/blob/<sha256>/<index>?cs=<chunk_size>;src=<who>`, answered by the hub (blob store) and by the sender
+ * (its [OutgoingCache]). `src` names one server: receivers ask `hub`, then the publishing device, then `any`,
+ * and keep the first that answered, so each chunk crosses a slow router (note4c) once. Queries without `src`
+ * (older receivers) are answered by everyone. Queries ask for priority DATA_LOW and congestion-control BLOCK
+ * (replies inherit both): note events still go first, and a 256 KiB reply crossing a router waits for room
+ * instead of being dropped. [TransferOptions.inFlight] chunks are requested at once; a receiver takes the
+ * first reply and does not wait for the query's final message.
  *
  * Receivers assemble into `<partialDir>/<sha256>.part` (app cache, outside the vault: SAF providers,
  * Obsidian and Autosync never see a partial file), verify the SHA-256, and only then hand the bytes to
@@ -40,6 +47,19 @@ object Blob {
     fun key(sha: String, i: Long): String = "$PREFIX/$sha/$i"
 
     fun selector(sha: String, i: Long, chunkSize: Long): String = "${key(sha, i)}?cs=$chunkSize"
+
+    /** `src` asking only the hub / every holder. */
+    const val SRC_HUB = "hub"
+    const val SRC_ANY = "any"
+
+    /** `vault/blob/<sha256>/<i>?cs=<chunk_size>;src=<who>` */
+    fun selector(sha: String, i: Long, chunkSize: Long, src: String): String = "${selector(sha, i, chunkSize)};src=$src"
+
+    /** Does the agent [device] answer a query with [src]? No `src` (older receivers) or `any`: yes. */
+    fun agentAnswers(device: String, src: String?): Boolean = src == null || src == SRC_ANY || src == device
+
+    /** Order a receiver asks in for a file published by [origin]: hub, then [origin], then anyone. */
+    fun sources(origin: String): List<String> = listOf(SRC_HUB, origin, SRC_ANY).filter { it.isNotEmpty() }.distinct()
 
     /** Inverse of [key]: `(sha256, index)`. */
     fun parseKey(k: String): Pair<String, Long>? {
@@ -71,6 +91,8 @@ data class TransferOptions(
     val rounds: Int = 8,
     /** Pause between passes (doubles, max 8x). */
     val backoffMs: Long = 500,
+    /** Chunk queries in flight per transfer (1 MiB at the default chunk size). */
+    val inFlight: Int = 4,
 )
 
 /**
@@ -167,15 +189,19 @@ class BlobFetchException(message: String) : Exception(message)
 /** Outcome of a successful [BlobFetcher.fetch]. */
 data class Fetched(val bytes: ByteArray, val chunks: Long, val resumed: Int, val retries: Int, val elapsedMs: Long)
 
-/** Pulls blobs chunk by chunk through [chunk] (`(sha, index, chunkSize) -> bytes or null`). */
+/**
+ * Pulls blobs chunk by chunk through [chunk] `(sha, index, chunkSize, src) -> bytes or null`, with
+ * [TransferOptions.inFlight] requests at once. Tries the `src` values in order and sticks to the first that
+ * answered.
+ */
 class BlobFetcher(
     private val partialDir: File,
     private val options: TransferOptions,
-    private val chunk: (String, Long, Long) -> ByteArray?,
+    private val chunk: (String, Long, Long, String) -> ByteArray?,
     private val sleep: (Long) -> Unit = { Thread.sleep(it) },
 ) {
-    /** Fetch and verify blob [sha] ([info]); throws [BlobFetchException] when it gives up. */
-    fun fetch(sha: String, info: BlobInfo): Fetched {
+    /** Fetch and verify blob [sha] ([info]) from [sources]; throws [BlobFetchException] when it gives up. */
+    fun fetch(sha: String, info: BlobInfo, sources: List<String> = listOf(Blob.SRC_ANY)): Fetched {
         val t0 = System.currentTimeMillis()
         val cs = info.chunkSize.coerceIn(Blob.MIN_CHUNK_SIZE, Blob.MAX_CHUNK_SIZE)
         val asm = Assembler(partialDir, sha, info.size, cs)
@@ -184,30 +210,59 @@ class BlobFetcher(
         var mismatch = false
         var wait = options.backoffMs
         val rounds = options.rounds.coerceAtLeast(1)
-        for (round in 0 until rounds) {
-            for (i in asm.missing()) {
-                val b = chunk(sha, i, cs)
-                if (b == null || !asm.put(i, b)) { retries++; break }
+        val width = options.inFlight.coerceIn(1, 16)
+        val srcs = sources.ifEmpty { listOf(Blob.SRC_ANY) }
+        val pref = AtomicInteger(0)
+        fun one(i: Long): ByteArray? {
+            val start = pref.get()
+            for (k in srcs.indices) {
+                val idx = (start + k) % srcs.size
+                val b = runCatching { chunk(sha, i, cs, srcs[idx]) }.getOrNull()
+                if (b != null && b.isNotEmpty()) { pref.set(idx); return b }
             }
-            if (asm.missing().isEmpty()) {
-                val bytes = asm.finish()
-                if (bytes != null) return Fetched(bytes, asm.chunks, resumed, retries, System.currentTimeMillis() - t0)
-                mismatch = true
-                continue
+            return null
+        }
+        val pool = Executors.newFixedThreadPool(width) { r -> Thread(r, "vault-events-chunk").apply { isDaemon = true } }
+        try {
+            for (round in 0 until rounds) {
+                // Up to `width` requests in flight; after `width` failures in a row the source is gone for now.
+                val ecs = ExecutorCompletionService<Pair<Long, ByteArray?>>(pool)
+                val todo = asm.missing().iterator()
+                var running = 0
+                var failedInARow = 0
+                while (true) {
+                    while (running < width && failedInARow < width && todo.hasNext()) {
+                        val i = todo.next()
+                        ecs.submit { i to one(i) }
+                        running++
+                    }
+                    if (running == 0) break
+                    val (i, b) = ecs.take().get()
+                    running--
+                    if (b != null && asm.put(i, b)) failedInARow = 0 else { retries++; failedInARow++ }
+                }
+                if (asm.missing().isEmpty()) {
+                    val bytes = asm.finish()
+                    if (bytes != null) return Fetched(bytes, asm.chunks, resumed, retries, System.currentTimeMillis() - t0)
+                    mismatch = true
+                    continue
+                }
+                if (round + 1 < rounds) {
+                    sleep(wait)
+                    wait = minOf(wait * 2, options.backoffMs * 8)
+                }
             }
-            if (round + 1 < rounds) {
-                sleep(wait)
-                wait = minOf(wait * 2, options.backoffMs * 8)
-            }
+        } finally {
+            pool.shutdownNow()
         }
         if (mismatch && asm.haveCount == 0) throw BlobFetchException("blob ${sha.take(12)}: sha256 mismatch")
         throw BlobFetchException("blob ${sha.take(12)}: incomplete, ${asm.haveCount}/${asm.chunks} chunks")
     }
 
-    /** Fetch the bytes of blob reference [ev]; returns the full event. */
+    /** Fetch the bytes of blob reference [ev] (hub first, then its origin device); returns the full event. */
     fun fill(ev: NoteEvent): Pair<NoteEvent, Fetched> {
         val info = ev.blob ?: throw BlobFetchException("not a blob reference")
-        val f = fetch(ev.stamp.sha256, info)
+        val f = fetch(ev.stamp.sha256, info, Blob.sources(ev.stamp.origin))
         return ev.withContent(f.bytes) to f
     }
 }

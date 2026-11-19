@@ -48,11 +48,15 @@ interface EventLink : AutoCloseable {
     fun peerCount(): Int
 
     /**
-     * Answer chunk queries on [Blob.WILDCARD] with [provider] `(sha256, index, chunkSize) -> bytes or null`
-     * (called on a transport thread). Default: not served.
+     * Answer chunk queries on [Blob.WILDCARD] addressed to [device] (or `any` / no `src`) with [provider]
+     * `(sha256, index, chunkSize) -> bytes or null`, on a transport thread (never behind the worker).
+     * Default: not served.
      */
-    fun serveBlobs(provider: (String, Long, Long) -> ByteArray?) {}
+    fun serveBlobs(device: String, provider: (String, Long, Long) -> ByteArray?) {}
 
-    /** One chunk of blob [sha]; `null` = nobody answered within [timeoutMs]. Default: none. */
-    fun fetchChunk(sha: String, index: Long, chunkSize: Long, timeoutMs: Long): ByteArray? = null
+    /**
+     * One chunk of blob [sha] from the server named [src] (`hub`, a device, `any`); `null` = nobody answered
+     * within [timeoutMs]. Returns on the first reply. Default: none.
+     */
+    fun fetchChunk(sha: String, index: Long, chunkSize: Long, timeoutMs: Long, src: String = Blob.SRC_ANY): ByteArray? = null
 }

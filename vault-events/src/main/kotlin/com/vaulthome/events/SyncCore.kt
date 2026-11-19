@@ -262,6 +262,13 @@ class SyncCore(
      * Given the hub's stamps: which paths to fetch (hub newer or unknown here) and which local states
      * to (re)publish (hub older or missing).
      */
+    /**
+     * Given the hub's stamps: paths to fetch (hub newer or unknown here, tombstones included) and states to
+     * republish (Rust `AgentCore::plan_catchup`). A state goes out again only when the hub lacks it or holds an
+     * older one **and** this device is responsible: it made it (`origin` is this device), or the file changed on
+     * disk since it was recorded. Another device's edits, deletes and conflict copies are never relayed (that
+     * device republishes its own); a tombstone the hub never had is not sent.
+     */
     fun planCatchup(hub: List<Stamp>): Pair<List<String>, List<String>> {
         val hubMap = hub.associateBy { it.path }
         val fetch = ArrayList<String>()
@@ -275,9 +282,26 @@ class SyncCore(
             // Tracked before a filter change (rclone conflict files): never sent again.
             if (VaultRules.isIgnored(p)) continue
             val h = hubMap[p]
-            if (h == null || e.stamp.beats(h)) republish += p
+            if (h != null && !e.stamp.beats(h)) continue
+            when {
+                changedOnDisk(p, e) -> republish += p
+                e.stamp.origin != device -> {}
+                e.stamp.deleted && h == null -> {}
+                else -> republish += p
+            }
         }
         return fetch to republish
+    }
+
+    /** Disk differs from the recorded state (cheap stat check; [republish] confirms with the hash). */
+    private fun changedOnDisk(rel: String, e: AgentState.Entry): Boolean {
+        val st = fs.stat(rel)
+        return when {
+            e.stamp.deleted -> st != null
+            st == null -> true
+            e.mtimeMs != null && e.size != null -> e.mtimeMs != st.first || e.size != st.second
+            else -> (fs.read(rel) as? Disk.Present)?.sha256 != e.stamp.sha256
+        }
     }
 
     /**
@@ -297,14 +321,21 @@ class SyncCore(
         return true
     }
 
-    /** Rebuild the event for our recorded state of [rel]; if the disk moved on, treat it as a local change. */
+    /**
+     * Rebuild the event for our recorded state of [rel]; if the disk moved on, treat it as a local change.
+     * Another device's unchanged state is never resent (`null`).
+     */
     fun republish(rel: String): NoteEvent? {
         if (VaultRules.isIgnored(rel)) return null
         val recorded = state.stamp(rel) ?: return null
-        // Keep who made this state; mark that it came back during catch-up.
-        val st = recorded.by(recorded.writer ?: "$device/unknown", Cause.CATCHUP_REPUBLISH)
+        // Keep who made this state (older builds recorded none: `<device>/catchup`); mark the catch-up.
+        val st = recorded.by(recorded.writer ?: "$device/catchup", Cause.CATCHUP_REPUBLISH)
         val disk = fs.read(rel)
+        val foreign = st.origin != device
         return when {
+            // Unchanged here and made elsewhere: not ours to resend.
+            foreign && disk is Disk.Absent && st.deleted -> null
+            foreign && disk is Disk.Present && !st.deleted && disk.sha256 == st.sha256 -> null
             disk is Disk.Absent && st.deleted -> NoteEvent(FORMAT_VERSION, st, null)
             disk is Disk.Present && !st.deleted && disk.sha256 == st.sha256 -> NoteEvent(FORMAT_VERSION, st, disk.bytes)
             disk is Disk.Skipped -> null

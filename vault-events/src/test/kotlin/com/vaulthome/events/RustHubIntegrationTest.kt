@@ -2,6 +2,7 @@ package com.vaulthome.events
 
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -126,9 +127,13 @@ class RustHubIntegrationTest {
         ZenohLink.open(LinkConfig(LinkMode.CLIENT, listOf(ep))).use { l ->
             val ref = l.fetchNote("Daily/s24 photo.jpg", 3_000)!!
             assertTrue("hub replies with a reference", ref.isBlobRef)
-            // The hub serves the chunks itself.
-            val c0 = l.fetchChunk(ref.stamp.sha256, 0, Blob.DEFAULT_CHUNK_SIZE, 3_000)!!
+            // The hub serves the chunks itself (src=hub: only the hub answers).
+            val c0 = l.fetchChunk(ref.stamp.sha256, 0, Blob.DEFAULT_CHUNK_SIZE, 3_000, Blob.SRC_HUB)!!
             assertTrue(c0.contentEquals(fromS24.copyOf(Blob.DEFAULT_CHUNK_SIZE.toInt())))
+            // Nobody is called "nobody": the query ends at once instead of waiting for a timeout.
+            val t0 = System.currentTimeMillis()
+            assertNull(l.fetchChunk(ref.stamp.sha256, 0, Blob.DEFAULT_CHUNK_SIZE, 10_000, "nobody"))
+            assertTrue("final reply not awaited for 10 s", System.currentTimeMillis() - t0 < 5_000)
         }
         // Notes still flow after the photos (sessions not dropped).
         b.put("Notes/after photos.md", "still linked\n")
@@ -168,5 +173,27 @@ class RustHubIntegrationTest {
         r.put("Notes/from router.md", "s24 router\n")
         waitFor("router edit reaches agent") { File(c, "Notes/from router.md").isFile }
         assertTrue("router sees the hub as a router link", er.status.routers >= 1)
+
+        // Large files across the router hop (the note4c / S24 router case), both ways, without stalls.
+        val up = ByteArray(3_500_000) { (it * 7 % 251).toByte() }
+        File(c, "Daily").mkdirs()
+        val t0 = System.currentTimeMillis()
+        File(c, "Daily/latitude photo.jpg").writeBytes(up)
+        waitFor("3.5 MB Rust agent -> Kotlin router's vault", 30_000) {
+            File(r, "Daily/latitude photo.jpg").let { it.isFile && it.length() == up.size.toLong() && sha256Hex(it.readBytes()) == sha256Hex(up) }
+        }
+        val upMs = System.currentTimeMillis() - t0
+        val down = ByteArray(2_600_000) { (it * 11 % 241).toByte() }
+        File(r, "Daily").mkdirs()
+        val t1 = System.currentTimeMillis()
+        File(r, "Daily/s24 photo.jpg").writeBytes(down)
+        waitFor("2.6 MB Kotlin router -> Rust agent", 30_000) {
+            File(c, "Daily/s24 photo.jpg").let { it.isFile && it.length() == down.size.toLong() && sha256Hex(it.readBytes()) == sha256Hex(down) }
+        }
+        val downMs = System.currentTimeMillis() - t1
+        println("across the Kotlin router: up $upMs ms, down $downMs ms")
+        assertTrue("up $upMs ms", upMs < 15_000)
+        assertTrue("down $downMs ms", downMs < 15_000)
+        for (d in listOf(r, c)) assertTrue(File(d, "Daily").listFiles()!!.none { it.name.contains("(conflict ") })
     }
 }

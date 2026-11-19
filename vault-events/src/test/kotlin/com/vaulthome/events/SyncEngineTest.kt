@@ -19,7 +19,7 @@ class SyncEngineTest {
     class Bus {
         val stored = HashMap<String, NoteEvent>()
         val subs = CopyOnWriteArrayList<(String, ByteArray) -> Unit>()
-        val blobServers = CopyOnWriteArrayList<(String, Long, Long) -> ByteArray?>()
+        val blobServers = CopyOnWriteArrayList<Pair<String, (String, Long, Long) -> ByteArray?>>()
         var puts = 0
         var maxPut = 0
         var chunkRequests = 0
@@ -39,10 +39,10 @@ class SyncEngineTest {
             override fun fetchNote(path: String, timeoutMs: Long) = synchronized(this@Bus) { stored[path] }
             override fun routerCount() = 1
             override fun peerCount() = 0
-            override fun serveBlobs(provider: (String, Long, Long) -> ByteArray?) { blobServers += provider }
-            override fun fetchChunk(sha: String, index: Long, chunkSize: Long, timeoutMs: Long): ByteArray? {
+            override fun serveBlobs(device: String, provider: (String, Long, Long) -> ByteArray?) { blobServers += device to provider }
+            override fun fetchChunk(sha: String, index: Long, chunkSize: Long, timeoutMs: Long, src: String): ByteArray? {
                 synchronized(this@Bus) { chunkRequests++ }
-                return blobServers.firstNotNullOfOrNull { it(sha, index, chunkSize) }
+                return blobServers.filter { Blob.agentAnswers(it.first, src) }.firstNotNullOfOrNull { it.second(sha, index, chunkSize) }
             }
             override fun close() {}
         }

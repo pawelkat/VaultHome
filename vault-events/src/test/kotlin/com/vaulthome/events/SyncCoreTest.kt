@@ -245,6 +245,70 @@ class SyncCoreTest {
         assertEquals(Cause.CATCHUP_REPUBLISH, again.stamp.cause)
     }
 
+    /** TowerX case (Rust `catchup_never_relays_other_devices_states`). */
+    @Test
+    fun catchUpNeverRelaysOtherDevicesStates() {
+        val dir = tmp.newFolder("relay")
+        val c = core(dir, "towerx")
+        val ep2 = NoteEvent.put("app/endpoints.json", "v2".toByteArray(), "s24", 2, null, 10)
+        val ep3 = NoteEvent.put("app/endpoints.json", "v3".toByteArray(), "s24", 3, ep2.stamp.sha256, 20)
+        val copy = NoteEvent.put("Daily/p (conflict nitro5 2026-11-18).jpg", "jpg".toByteArray(), "s24", 1, null, 30)
+        val t1 = NoteEvent.put("Notes/zz test.md", "t".toByteArray(), "box", 2, null, 40)
+        val t3 = NoteEvent.delete("Notes/zz test.md", "box", 3, t1.stamp.sha256, 50)
+        for (ev in listOf(ep3, copy, t1, t3)) c.onIncoming(ev)
+        assertTrue(File(dir, "Daily/p (conflict nitro5 2026-11-18).jpg").exists())
+        val hub = listOf(ep2.stamp)
+        val (fetch, republish) = c.planCatchup(hub)
+        assertTrue(fetch.isEmpty())
+        assertTrue("relayed $republish", republish.isEmpty())
+        assertNull(c.republish("app/endpoints.json"))
+        assertNull(c.republish("Notes/zz test.md"))
+        // Edited here since: ours to publish, as a new version from this device.
+        Thread.sleep(5)
+        dir.put("app/endpoints.json", "towerx edit")
+        File(dir, "app/endpoints.json").setLastModified(System.currentTimeMillis() + 2_000)
+        assertEquals(listOf("app/endpoints.json"), c.planCatchup(hub).second)
+        val ev = c.republish("app/endpoints.json")!!
+        assertEquals("towerx", ev.stamp.origin)
+        assertEquals(4L, ev.stamp.version)
+        assertEquals("towerx/external", ev.stamp.writer)
+    }
+
+    @Test
+    fun catchUpAppliesNewerHubTombstone() {
+        val dir = tmp.newFolder("tomb")
+        val c = core(dir, "towerx")
+        val p = "Daily/x (conflict nitro5 2026-11-18).jpg"
+        dir.put(p, "jpg")
+        val mine = c.onLocal(p)!!
+        val gone = NoteEvent.delete(p, "box", mine.stamp.version + 1, mine.stamp.sha256, mine.stamp.tsMs + 1)
+        val (fetch, republish) = c.planCatchup(listOf(gone.stamp))
+        assertEquals(listOf(p), fetch)
+        assertTrue(republish.isEmpty())
+        val r = c.onIncoming(gone)
+        assertTrue(r.changed && r.publish.isEmpty())
+        assertFalse("delete applied", File(dir, p).exists())
+        val (f2, r2) = c.planCatchup(listOf(gone.stamp))
+        assertTrue(f2.isEmpty() && r2.isEmpty())
+    }
+
+    @Test
+    fun catchUpRepublishesOwnStatesWithAWriterLabel() {
+        val dir = tmp.newFolder("own")
+        val c = core(dir, "towerx")
+        dir.put("Notes/a.md", "a")
+        val a = c.onLocal("Notes/a.md")!!
+        c.state.record(a.stamp.copy(writer = null, cause = null), FileVaultTree(dir).stat("Notes/a.md"))
+        dir.put("Notes/gone.md", "g")
+        c.onLocal("Notes/gone.md")!!
+        File(dir, "Notes/gone.md").delete()
+        assertTrue(c.onLocal("Notes/gone.md")!!.stamp.deleted)
+        assertEquals(listOf("Notes/a.md"), c.planCatchup(emptyList()).second)
+        val ev = c.republish("Notes/a.md")!!
+        assertEquals("towerx/catchup", ev.stamp.writer)
+        assertEquals(Cause.CATCHUP_REPUBLISH, ev.stamp.cause)
+    }
+
     @Test
     fun conflictCopyCarriesWriterCauseAndBothSides() {
         val dir = tmp.newFolder("cc")
