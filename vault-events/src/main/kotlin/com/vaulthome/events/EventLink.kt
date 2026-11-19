@@ -69,4 +69,10 @@ interface EventLink : AutoCloseable {
      * within [timeoutMs]. Returns on the first reply. Default: none.
      */
     fun fetchChunk(sha: String, index: Long, chunkSize: Long, timeoutMs: Long, src: String = Blob.SRC_ANY): ByteArray? = null
+
+    /**
+     * Publish a transfer ack on `vault/ack/<sha256>/<this device>`. Default: no-op (unit-test
+     * fakes override when they need to observe it).
+     */
+    fun publishAck(sha256: String, ack: TransferAck) {}
 }

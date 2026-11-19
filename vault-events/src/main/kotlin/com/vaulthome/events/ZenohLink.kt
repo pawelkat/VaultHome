@@ -48,6 +48,11 @@ class ZenohLink private constructor(private val session: Session, private val de
         session.put(ke, ZBytes.from(ev.encode()), qos = QoS(congestionControl = CongestionControl.BLOCK)).getOrThrow()
     }
 
+    override fun publishAck(sha256: String, ack: TransferAck) {
+        val ke = KeyExpr.tryFrom(Ack.key(sha256, device)).getOrThrow()
+        session.put(ke, ZBytes.from(ack.encode()), qos = QoS(congestionControl = CongestionControl.BLOCK)).getOrThrow()
+    }
+
     private fun query(key: String, timeoutMs: Long, onReply: (Sample) -> Unit) {
         val done = CountDownLatch(1)
         val sel = if (device.isBlank()) Selector(KeyExpr.tryFrom(key).getOrThrow())

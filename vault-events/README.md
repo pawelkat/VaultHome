@@ -22,6 +22,14 @@ whose bytes were not fetched is never applied or saved as a conflict copy. Catch
 
 Older VaultHome builds drop references as `MissingContent` (nothing written).
 
+## Transfer acks
+
+After the engine writes a received file (inline or blob) and verifies its SHA-256, and after it
+publishes a live file it has on disk, it puts `{status: ok|fail, reason?, path, bytes, duration_ms}`
+on `vault/ack/<sha256>/<device>`. The box hub logs `<device> received <path> (<bytes>) ok in X.Xs`
+(or `fail: <reason>`); `vault-events who <path>` lists the devices that confirmed the current
+version. A failed blob fetch publishes `status: fail`. Older hubs ignore the key.
+
 ## Synced-note notifications
 
 `SyncNotices` decides what VaultHome shows in its "Synced notes" channel:

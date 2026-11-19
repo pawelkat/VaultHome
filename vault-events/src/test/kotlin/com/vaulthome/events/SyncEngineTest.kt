@@ -24,8 +24,9 @@ class SyncEngineTest {
         var maxPut = 0
         var chunkRequests = 0
         val configs = CopyOnWriteArrayList<LinkConfig>()
+        val acks = CopyOnWriteArrayList<Triple<String, String, TransferAck>>()
 
-        fun link() = object : EventLink {
+        fun link(device: String = "") = object : EventLink {
             override fun subscribe(onSample: (String, ByteArray) -> Unit) { subs += onSample }
             override fun publish(ev: NoteEvent) {
                 synchronized(this@Bus) {
@@ -50,6 +51,9 @@ class SyncEngineTest {
                 synchronized(this@Bus) { chunkRequests++ }
                 return blobServers.filter { Blob.agentAnswers(it.first, src) }.firstNotNullOfOrNull { it.second(sha, index, chunkSize) }
             }
+            override fun publishAck(sha256: String, ack: TransferAck) {
+                acks += Triple(device, sha256, ack)
+            }
             override fun close() {}
         }
     }
@@ -57,7 +61,7 @@ class SyncEngineTest {
     private fun engine(bus: Bus, dir: File, dev: String) = SyncEngine(
         SyncCore(FileVaultTree(dir), dev, AgentState(dev, dir.path)),
         LinkConfig(LinkMode.CLIENT, listOf("tcp/127.0.0.1:1")),
-        openLink = { bus.configs += it; bus.link() },
+        openLink = { bus.configs += it; bus.link(it.device) },
         options = EngineOptions(
             rescanIntervalMs = 100, catchupIntervalMs = 60_000, linkCheckMs = 1_000,
             partialDir = File(tmp.root, "partial-$dev"),
@@ -94,6 +98,13 @@ class SyncEngineTest {
         val eb = engine(bus, b, "s24").also { it.start() }
         // B catches up A's note from the store; A gets B's note live.
         waitFor { File(b, "Notes/one.md").exists() && File(a, "Daily/2026-11-18.md").exists() }
+        waitFor {
+            val sha = sha256Hex("1".toByteArray())
+            bus.acks.count { it.second == sha && it.third.status == AckStatus.OK } >= 2
+        }
+        val sha = sha256Hex("1".toByteArray())
+        val who = bus.acks.filter { it.second == sha && it.third.status == AckStatus.OK }.map { it.first }.toSet()
+        assertEquals(setOf("box", "s24"), who)
         // Edit on B propagates to A through the rescan poll.
         Thread.sleep(50)
         File(b, "Notes/one.md").writeText("1 edited on s24")

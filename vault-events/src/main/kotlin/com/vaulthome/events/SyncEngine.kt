@@ -221,17 +221,19 @@ class SyncEngine(
         try {
             transfers.execute {
                 waitForHub(l, ev)
+                val t0 = System.currentTimeMillis()
                 val full = try {
                     val (full, f) = fetcher(l).fill(ev)
                     log(fetchedLine(ev, f))
                     full
                 } catch (e: Throwable) {
                     log("blob for ${ev.path} not fetched: ${e.message}; catch-up retries")
+                    publishFailAck(l, ev, t0, e.message ?: e.javaClass.simpleName)
                     null
                 }
                 if (!stopped) worker.execute {
                     fetching.remove(id)
-                    if (full != null) applyIncoming(full)
+                    if (full != null) applyIncoming(full, t0)
                 }
             }
         } catch (e: Throwable) {
@@ -258,7 +260,7 @@ class SyncEngine(
         return false
     }
 
-    private fun applyIncoming(ev: NoteEvent) {
+    private fun applyIncoming(ev: NoteEvent, startedAtMs: Long = System.currentTimeMillis()) {
         guarded("apply ${ev.path}") {
             val a = core.onIncoming(ev)
             if (a.changed) log(appliedLine(ev))
@@ -274,6 +276,7 @@ class SyncEngine(
                 onVaultChanged(listOf(ev.path) + a.conflicts)
                 queueNotes(SyncNotices.fromIncoming(ev, a, core.device))
             }
+            publishIncomingAck(ev, a, startedAtMs)
             publishAll(a.publish)
             core.saveIfDirty()
         }
@@ -295,8 +298,16 @@ class SyncEngine(
         val changed = ArrayList<String>()
         val notes = ArrayList<SyncedNote>()
         for (p in fetch) {
+            val t0 = System.currentTimeMillis()
             val hubStamp = byPath[p]
-            if (hubStamp != null && core.adoptIfSame(hubStamp)) { adopted++; continue }
+            if (hubStamp != null && core.adoptIfSame(hubStamp)) {
+                adopted++
+                if (!hubStamp.deleted && hubStamp.sha256.isNotEmpty()) {
+                    val bytes = (core.fs.read(p) as? Disk.Present)?.bytes?.size?.toLong() ?: 0L
+                    publishAck(l, hubStamp.sha256, TransferAck.ok(p, bytes, System.currentTimeMillis() - t0))
+                }
+                continue
+            }
             var ev = l.fetchNote(p, options.queryTimeoutMs)
             if (ev == null) { log("catch-up: hub listed $p but returned nothing"); continue }
             if (ev.isBlobRef && core.needsBytes(ev)) {
@@ -306,6 +317,7 @@ class SyncEngine(
                     full
                 } catch (e: Throwable) {
                     log("catch-up: blob for $p not fetched: ${e.message}; next pass retries")
+                    publishFailAck(l, ev, t0, e.message ?: e.javaClass.simpleName)
                     continue
                 }
             }
@@ -315,6 +327,7 @@ class SyncEngine(
             notes += SyncNotices.fromIncoming(ev, a, core.device)
             conflicts += a.conflicts.size
             changed += a.conflicts
+            publishIncomingAck(ev, a, t0)
             publishAll(a.publish)
         }
         val out = republish.mapNotNull { core.republish(it) }
@@ -353,9 +366,13 @@ class SyncEngine(
                 val t = options.transfer
                 val ref = ev.toBlobRef(t.inlineMax, t.chunkSize)
                 if (ref != null) outgoing.insert(ev.stamp.sha256, ev.content!!, ev.path)
+                val t0 = System.currentTimeMillis()
                 l.publish(ref ?: ev)
                 val b = ref?.blob
                 log(publishedLine(ev) + if (b != null) " as blob (${b.size} B, ${b.chunks} chunks of ${b.chunkSize} B, sha256 ${ev.stamp.sha256.take(12)})" else "")
+                if (!ev.stamp.deleted && ev.stamp.sha256.isNotEmpty()) {
+                    publishAck(l, ev.stamp.sha256, TransferAck.ok(ev.path, ev.size, System.currentTimeMillis() - t0))
+                }
                 update {
                     it.copy(
                         published = it.published + 1,
@@ -367,6 +384,26 @@ class SyncEngine(
                 log("publish ${ev.path} failed: ${e.message}")
                 update { it.copy(lastError = "publish ${ev.path}: ${e.message}") }
             }
+        }
+    }
+
+    private fun publishIncomingAck(ev: NoteEvent, a: Applied, startedAtMs: Long) {
+        if (ev.stamp.deleted || ev.isBlobRef || ev.stamp.sha256.isEmpty()) return
+        if (a.decision !is Decision.Apply && a.decision !is Decision.Adopt) return
+        val l = link ?: return
+        publishAck(l, ev.stamp.sha256, TransferAck.ok(ev.path, ev.size, System.currentTimeMillis() - startedAtMs))
+    }
+
+    private fun publishFailAck(l: EventLink, ev: NoteEvent, startedAtMs: Long, reason: String) {
+        if (ev.stamp.sha256.isEmpty()) return
+        publishAck(l, ev.stamp.sha256, TransferAck.fail(ev.path, ev.size, System.currentTimeMillis() - startedAtMs, reason))
+    }
+
+    private fun publishAck(l: EventLink, sha256: String, ack: TransferAck) {
+        try {
+            l.publishAck(sha256, ack)
+        } catch (e: Throwable) {
+            log("ack ${ack.path} failed: ${e.message}")
         }
     }
 
