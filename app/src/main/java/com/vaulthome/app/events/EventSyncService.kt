@@ -136,7 +136,9 @@ class EventSyncService : Service() {
                     if (disk !is Disk.Skipped) {
                         val next = SharedEndpoints.mergeSelf((disk as? Disk.Present)?.bytes, settings.selfEntry(), System.currentTimeMillis())
                         if (next != null) {
-                            // Written like a local edit: the initial scan right after this publishes it.
+                            // Written like a local edit: the initial scan right after this publishes it,
+                            // labelled <device>/vaulthome (the app's own write), not <device>/external.
+                            it.noteOwnWrite(SharedEndpoints.PATH, next)
                             fs.writeAtomic(SharedEndpoints.PATH, next)
                             Log.i(TAG, "shared endpoints: wrote ${settings.device} entry")
                         }

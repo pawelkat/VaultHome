@@ -17206,7 +17206,7 @@
       "path": "Attachments /p.png"
     },
     {
-      "ignored": false,
+      "ignored": true,
       "path": "Notes/note4.md..conflict-Date1"
     },
     {
@@ -17244,6 +17244,34 @@
     {
       "ignored": false,
       "path": "Notes/x.TMP"
+    },
+    {
+      "ignored": true,
+      "path": "Daily/2026-11-19.md..conflict-Date1"
+    },
+    {
+      "ignored": true,
+      "path": "Notes/x.md.conflict-2026-11-19"
+    },
+    {
+      "ignored": true,
+      "path": "Notes/x.md.conflict1"
+    },
+    {
+      "ignored": false,
+      "path": "Notes/a.conflict"
+    },
+    {
+      "ignored": false,
+      "path": "Notes/a.conflictX"
+    },
+    {
+      "ignored": false,
+      "path": "Notes/conflict-resolution.md"
+    },
+    {
+      "ignored": false,
+      "path": "Daily/2026-09-19-20260919_153121 (conflict nitro5 2026-11-18).jpg"
     }
   ],
   "index_reply": "{\"format\":1,\"hub\":\"box\",\"stamps\":[{\"path\":\"Notes/a.md\",\"version\":1,\"ts_ms\":1763424000000,\"origin\":\"box\",\"deleted\":false,\"sha256\":\"3bfc269594ef649228e9a74bab00f042efc91d5acc6fbee31a382e80d42388fe\"},{\"path\":\"Notes/a.md\",\"version\":3,\"ts_ms\":1763424000020,\"origin\":\"s24\",\"deleted\":true,\"sha256\":\"\",\"prev_sha256\":\"fb04dcb6970e4c3d1873de51fd5a50d7bb46b3383113602665c350ec40b5f990\"}]}",
@@ -17375,6 +17403,76 @@
     {
       "error": "Absolute",
       "path": "nul\u0000x"
+    }
+  ],
+  "labelled_events": [
+    {
+      "cause": "local-edit",
+      "conflict": null,
+      "content_b64": "aGk=",
+      "deleted": false,
+      "encoded": "{\"format\":1,\"path\":\"a.md\",\"version\":1,\"ts_ms\":7,\"origin\":\"box\",\"deleted\":false,\"sha256\":\"8f434346648f6b96df89dda901c5176b10a6d83961dd3c1ac88b59b2dc327aa4\",\"writer\":\"box/galanonim\",\"cause\":\"local-edit\",\"content\":\"aGk=\"}",
+      "key": "vault/notes/a.md",
+      "name": "put_writer",
+      "origin": "box",
+      "path": "a.md",
+      "prev_sha256": null,
+      "ts_ms": 7,
+      "version": 1,
+      "writer": "box/galanonim"
+    },
+    {
+      "cause": "delete",
+      "conflict": null,
+      "content_b64": null,
+      "deleted": true,
+      "encoded": "{\"format\":1,\"path\":\"Notes/a.md\",\"version\":4,\"ts_ms\":6,\"origin\":\"s24\",\"deleted\":true,\"sha256\":\"\",\"prev_sha256\":\"5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03\",\"writer\":\"s24/external\",\"cause\":\"delete\"}",
+      "key": "vault/notes/Notes/a.md",
+      "name": "delete_writer",
+      "origin": "s24",
+      "path": "Notes/a.md",
+      "prev_sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+      "ts_ms": 6,
+      "version": 4,
+      "writer": "s24/external"
+    },
+    {
+      "cause": "bisync-pull",
+      "conflict": null,
+      "content_b64": "Yg==",
+      "deleted": false,
+      "encoded": "{\"format\":1,\"path\":\"b.md\",\"version\":2,\"ts_ms\":1,\"origin\":\"x\",\"deleted\":false,\"sha256\":\"3e23e8160039594a33894f6564e1b1348bbd7a0088d42c4acb73eeaed59c009d\",\"writer\":\"x/\\\"q\\\" \\u0001\",\"cause\":\"bisync-pull\",\"content\":\"Yg==\"}",
+      "key": "vault/notes/b.md",
+      "name": "escaped_writer",
+      "origin": "x",
+      "path": "b.md",
+      "prev_sha256": null,
+      "ts_ms": 1,
+      "version": 2,
+      "writer": "x/\"q\" \u0001"
+    },
+    {
+      "cause": "conflict-copy",
+      "conflict": {
+        "loser_origin": "nitro5",
+        "loser_sha256": "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81",
+        "loser_size": 3,
+        "of": "Daily/p.jpg",
+        "winner_origin": "s24",
+        "winner_sha256": "50e721e49c013f00c62cf59f2163542a9d8df02464efeb615d31051b0fddc326",
+        "winner_size": 1
+      },
+      "content_b64": "AQID",
+      "deleted": false,
+      "encoded": "{\"format\":1,\"path\":\"Daily/p (conflict nitro5 2026-11-18).jpg\",\"version\":1,\"ts_ms\":1763424000000,\"origin\":\"s24\",\"deleted\":false,\"sha256\":\"039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81\",\"writer\":\"s24/vaulthome\",\"cause\":\"conflict-copy\",\"content\":\"AQID\",\"conflict\":{\"of\":\"Daily/p.jpg\",\"winner_sha256\":\"50e721e49c013f00c62cf59f2163542a9d8df02464efeb615d31051b0fddc326\",\"winner_size\":1,\"winner_origin\":\"s24\",\"loser_sha256\":\"039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81\",\"loser_size\":3,\"loser_origin\":\"nitro5\"}}",
+      "key": "vault/notes/Daily/p (conflict nitro5 2026-11-18).jpg",
+      "name": "conflict_copy",
+      "origin": "s24",
+      "path": "Daily/p (conflict nitro5 2026-11-18).jpg",
+      "prev_sha256": null,
+      "ts_ms": 1763424000000,
+      "version": 1,
+      "writer": "s24/vaulthome"
     }
   ],
   "source": "VaultSearch crates/vault-events (feat/vault-events-stage1)"

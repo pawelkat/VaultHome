@@ -3,7 +3,7 @@
 use base64::Engine;
 use serde_json::{json, Value};
 use vault_events::conflict::{self, Decision};
-use vault_events::event::{sha256_hex, NoteEvent, Stamp};
+use vault_events::event::{cause, sha256_hex, ConflictInfo, NoteEvent, Stamp};
 use vault_events::key;
 use vault_events::net::IndexReply;
 use vault_events::vault::is_ignored;
@@ -55,6 +55,22 @@ fn main() {
     add("json_escapes", NoteEvent::put("Notes/q \" x\t\u{1}\u{7f}.md", b"\x00\x01".to_vec(), "dev \"q\" \\ /", 9, None, 18_446_744_073_709_551_615u64 / 2));
     add("empty", NoteEvent::put("Notes/empty.md", Vec::new(), "box", 1, None, 0));
     add("big_numbers", NoteEvent::put("b.md", b"b".to_vec(), "box", u64::MAX / 4, None, u64::MAX / 8));
+    // --- writer / cause / conflict (optional fields)
+    let mut labelled = Vec::new();
+    let mut addl = |name: &str, e: NoteEvent| {
+        labelled.push(json!({"name":name,"key":e.key().unwrap(),"encoded":String::from_utf8(e.encode()).unwrap(),
+            "path":e.stamp.path,"version":e.stamp.version,"ts_ms":e.stamp.ts_ms,"origin":e.stamp.origin,
+            "deleted":e.stamp.deleted,"prev_sha256":e.stamp.prev_sha256,"writer":e.stamp.writer,"cause":e.stamp.cause,
+            "content_b64":e.content.as_ref().map(|c| b64(c)),"conflict":e.conflict}));
+    };
+    addl("put_writer", NoteEvent::put("a.md", b"hi".to_vec(), "box", 1, None, 7).by("box/galanonim", cause::LOCAL_EDIT));
+    addl("delete_writer", NoteEvent::delete("Notes/a.md", "s24", 4, Some(sha256_hex(b"hello\n")), 6).by("s24/external", cause::DELETE));
+    addl("escaped_writer", NoteEvent::put("b.md", b"b".to_vec(), "x", 2, None, 1).by("x/\"q\" \u{1}", "bisync-pull"));
+    let mut cc = NoteEvent::put("Daily/p (conflict nitro5 2026-11-18).jpg", vec![1, 2, 3], "s24", 1, None, day)
+        .by("s24/vaulthome", cause::CONFLICT_COPY);
+    cc.conflict = Some(ConflictInfo { of: "Daily/p.jpg".into(), winner_sha256: sha256_hex(b"w"), winner_size: 1,
+        winner_origin: "s24".into(), loser_sha256: sha256_hex(&[1, 2, 3]), loser_size: 3, loser_origin: "nitro5".into() });
+    addl("conflict_copy", cc);
     // --- decode rejects (payload strings)
     let good = String::from_utf8(NoteEvent::put("a.md", b"hi".to_vec(), "box", 1, None, 7).encode()).unwrap();
     let mut rejects = Vec::new();
@@ -112,13 +128,15 @@ fn main() {
     // --- ignore rules
     let ign: Vec<Value> = [".obsidian/workspace.json","Notes/.trash/x.md","Notes/.vault-events-tmp-1-2","Notes/a.md.tmp","Notes/a.md~",
         "Notes/a.md","Attachments /p.png","Notes/note4.md..conflict-Date1","~$doc.docx","Notes/.#lock","x.swp","x.swx","x.part","x.crdownload",
-        "x.partial","Notes/a (conflict s24 2025-11-18).md","Notes/x.TMP"]
+        "x.partial","Notes/a (conflict s24 2025-11-18).md","Notes/x.TMP",
+        "Daily/2026-11-19.md..conflict-Date1","Notes/x.md.conflict-2026-11-19","Notes/x.md.conflict1","Notes/a.conflict","Notes/a.conflictX",
+        "Notes/conflict-resolution.md","Daily/2026-09-19-20260919_153121 (conflict nitro5 2026-11-18).jpg"]
         .iter().map(|p| json!({"path":p,"ignored":is_ignored(p)})).collect();
     // --- index reply
     let idx = IndexReply { format: 1, hub: "box".into(), stamps: vec![p("v1","box",1,None,day), d("s24",3,Some("v2"),day+20)] };
     let out = json!({
         "source":"VaultSearch crates/vault-events (feat/vault-events-stage1)",
-        "keys":keys,"key_decode":key_decode,"events":events,"decode":rejects,"beats":beats,
+        "keys":keys,"key_decode":key_decode,"events":events,"labelled_events":labelled,"decode":rejects,"beats":beats,
         "dates":dates,"conflict_names":names,"decide":decide,"ignored":ign,
         "index_reply":serde_json::to_string(&idx).unwrap(),
     });

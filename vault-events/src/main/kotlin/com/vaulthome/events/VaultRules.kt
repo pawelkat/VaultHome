@@ -14,7 +14,21 @@ object VaultRules {
     fun isIgnored(rel: String): Boolean {
         for (comp in rel.split('/')) if (comp.startsWith('.')) return true
         val name = rel.substringAfterLast('/')
+        if (isRcloneConflictArtifact(name)) return true
         return name.endsWith('~') || name.startsWith("~$") || name.startsWith(".#") || TEMP_SUFFIXES.any { name.endsWith(it) }
+    }
+
+    /**
+     * rclone bisync's own conflict losers (Rust `vault::is_rclone_conflict_artifact`): `<name>.conflict-<x>`,
+     * `<name>..conflict-<x>` and the older `<name>.conflict<N>`. Every bisync device makes its own, so they are
+     * never synced. The agent's own `<name> (conflict <origin> <date>)` copies still sync.
+     */
+    fun isRcloneConflictArtifact(fileName: String): Boolean {
+        if (fileName.contains(".conflict-")) return true
+        val i = fileName.lastIndexOf(".conflict")
+        if (i < 0) return false
+        val tail = fileName.substring(i + ".conflict".length)
+        return tail.isNotEmpty() && tail.all { it in '0'..'9' }
     }
 
     /** `base` with ` n` before the extension (Rust `vault::numbered`). */

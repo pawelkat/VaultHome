@@ -24,6 +24,10 @@ data class Stamp(
     val deleted: Boolean = false,
     val sha256: String = "",
     val prevSha256: String? = null,
+    /** Who wrote this state, `<device>/<program>` (`s24/vaulthome`, `s24/external`). Debug only, not ordered. */
+    val writer: String? = null,
+    /** Why this state was produced; one of [Cause]. */
+    val cause: String? = null,
 ) {
     /**
      * Total order used by every device and the hub:
@@ -36,6 +40,15 @@ data class Stamp(
         Utf8.compare(origin, other.origin).let { if (it != 0) return it }
         return Utf8.compare(sha256, other.sha256)
     }
+
+    /** `writer` or `-` (older peers send none). */
+    val writerStr: String get() = writer ?: "-"
+
+    /** `cause` or `-`. */
+    val causeStr: String get() = cause ?: "-"
+
+    /** Same stamp, labelled. */
+    fun by(writer: String, cause: String): Stamp = copy(writer = writer, cause = cause)
 
     /** `true` if this strictly wins over [other]. */
     fun beats(other: Stamp): Boolean = compareRank(other) > 0
@@ -55,6 +68,8 @@ data class Stamp(
         sb.append(",\"deleted\":").append(deleted)
         sb.append(",\"sha256\":"); JsonOut.string(sb, sha256)
         if (prevSha256 != null) { sb.append(",\"prev_sha256\":"); JsonOut.string(sb, prevSha256) }
+        if (writer != null) { sb.append(",\"writer\":"); JsonOut.string(sb, writer) }
+        if (cause != null) { sb.append(",\"cause\":"); JsonOut.string(sb, cause) }
         if (braces) sb.append('}')
     }
 
@@ -67,6 +82,57 @@ data class Stamp(
             deleted = JsonIn.bool(o, "deleted") ?: false,
             sha256 = JsonIn.str(o, "sha256") ?: "",
             prevSha256 = JsonIn.optStr(o, "prev_sha256"),
+            writer = JsonIn.optStr(o, "writer"),
+            cause = JsonIn.optStr(o, "cause"),
+        )
+    }
+}
+
+/** Values of [Stamp.cause] (Rust `event::cause`). */
+object Cause {
+    const val LOCAL_EDIT = "local-edit"
+    const val EXTERNAL_EDIT = "external-edit"
+    const val BISYNC_PULL = "bisync-pull"
+    const val EVENT_APPLY_REPUBLISH = "event-apply-republish"
+    const val CONFLICT_COPY = "conflict-copy"
+    const val DELETE = "delete"
+    const val CATCHUP_REPUBLISH = "catchup-republish"
+    const val SEED = "seed"
+}
+
+/** Conflict-copy details (Rust `event::ConflictInfo`): which live path lost, both sides' hashes and sizes. */
+data class ConflictInfo(
+    val of: String,
+    val winnerSha256: String,
+    val winnerSize: Long,
+    val winnerOrigin: String,
+    val loserSha256: String,
+    val loserSize: Long,
+    val loserOrigin: String,
+) {
+    /** The live path kept the smaller side. */
+    val keptSmaller: Boolean get() = winnerSize < loserSize
+
+    internal fun write(sb: StringBuilder) {
+        sb.append("{\"of\":"); JsonOut.string(sb, of)
+        sb.append(",\"winner_sha256\":"); JsonOut.string(sb, winnerSha256)
+        sb.append(",\"winner_size\":").append(winnerSize)
+        sb.append(",\"winner_origin\":"); JsonOut.string(sb, winnerOrigin)
+        sb.append(",\"loser_sha256\":"); JsonOut.string(sb, loserSha256)
+        sb.append(",\"loser_size\":").append(loserSize)
+        sb.append(",\"loser_origin\":"); JsonOut.string(sb, loserOrigin)
+        sb.append('}')
+    }
+
+    companion object {
+        internal fun fromJson(o: JsonObject): ConflictInfo = ConflictInfo(
+            of = JsonIn.str(o, "of") ?: throw JsonIn.Bad("conflict.of"),
+            winnerSha256 = JsonIn.str(o, "winner_sha256") ?: throw JsonIn.Bad("conflict.winner_sha256"),
+            winnerSize = JsonIn.u64(o, "winner_size") ?: throw JsonIn.Bad("conflict.winner_size"),
+            winnerOrigin = JsonIn.str(o, "winner_origin") ?: "",
+            loserSha256 = JsonIn.str(o, "loser_sha256") ?: throw JsonIn.Bad("conflict.loser_sha256"),
+            loserSize = JsonIn.u64(o, "loser_size") ?: throw JsonIn.Bad("conflict.loser_size"),
+            loserOrigin = JsonIn.str(o, "loser_origin") ?: "",
         )
     }
 }
@@ -82,6 +148,8 @@ class NoteEvent(
     val stamp: Stamp,
     /** File bytes (base64 on the wire); `null` for a tombstone. */
     val content: ByteArray?,
+    /** Set on conflict-copy events only. */
+    val conflict: ConflictInfo? = null,
 ) {
     val path: String get() = stamp.path
 
@@ -95,15 +163,24 @@ class NoteEvent(
         sb.append("{\"format\":").append(format).append(',')
         stamp.writeFields(sb, false)
         if (content != null) sb.append(",\"content\":\"").append(Base64.getEncoder().encodeToString(content)).append('"')
+        if (conflict != null) { sb.append(",\"conflict\":"); conflict.write(sb) }
         sb.append('}')
         return sb.toString()
     }
 
     override fun equals(other: Any?): Boolean =
-        other is NoteEvent && other.format == format && other.stamp == stamp &&
+        other is NoteEvent && other.format == format && other.stamp == stamp && other.conflict == conflict &&
             (content?.contentEquals(other.content ?: return false) ?: (other.content == null))
 
     override fun hashCode(): Int = stamp.hashCode() * 31 + (content?.contentHashCode() ?: 0)
+
+    /** Content size in bytes (0 for a tombstone). */
+    val size: Long get() = content?.size?.toLong() ?: 0L
+
+    /** Same event, labelled with [writer] and [cause]. */
+    fun by(writer: String, cause: String): NoteEvent = NoteEvent(format, stamp.by(writer, cause), content, conflict)
+
+    fun withConflict(info: ConflictInfo): NoteEvent = NoteEvent(format, stamp, content, info)
 
     override fun toString(): String = "NoteEvent(${stamp}, ${content?.size ?: "no"} bytes)"
 
@@ -128,6 +205,15 @@ class NoteEvent(
             if (format == 0L || format > FORMAT_VERSION) {
                 throw DecodeException(DecodeErrorKind.UnsupportedFormat, "unsupported event format $format (this build reads <= $FORMAT_VERSION)")
             }
+            val conflict = try {
+                when (val c = root["conflict"]) {
+                    null, is JsonNull -> null
+                    is JsonObject -> ConflictInfo.fromJson(c)
+                    else -> throw JsonIn.Bad("conflict: expected an object")
+                }
+            } catch (e: JsonIn.Bad) {
+                throw DecodeException(DecodeErrorKind.Json, e.message ?: "bad conflict")
+            }
             val (stamp, content) = try {
                 Stamp.fromJson(root) to JsonIn.optStr(root, "content")?.let { JsonIn.base64(it) }
             } catch (e: JsonIn.Bad) {
@@ -143,7 +229,7 @@ class NoteEvent(
                 content == null && !stamp.deleted -> throw DecodeException(DecodeErrorKind.MissingContent, "live event without content")
                 content != null && sha256Hex(content) != stamp.sha256 -> throw DecodeException(DecodeErrorKind.HashMismatch, "sha256 does not match content")
             }
-            return NoteEvent(format.toInt(), stamp, content)
+            return NoteEvent(format.toInt(), stamp, content, conflict)
         }
     }
 }

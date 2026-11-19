@@ -57,6 +57,10 @@ class SyncEngine(
     /** "Synced notes" to post: remote changes only, grouped per [SyncNotices.plan]. Called on the worker. */
     private val onNotices: (List<Notice>) -> Unit = {},
 ) {
+    init {
+        core.log = log
+    }
+
     private val pendingNotes = ArrayList<SyncedNote>()
     private var notifyScheduled = false
     private val worker: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { r ->
@@ -135,6 +139,7 @@ class SyncEngine(
         guarded("shared config") { onConnected(core) }
         guarded("initial scan") {
             val b = core.scan()
+            core.seeding = false
             publishAll(b.publish)
             core.saveIfDirty()
             log("initial scan: published ${b.publish.size}")
@@ -178,7 +183,7 @@ class SyncEngine(
         }
         guarded("apply ${ev.path}") {
             val a = core.onIncoming(ev)
-            if (a.changed) log("applied ${ev.path} v${ev.stamp.version} from ${ev.stamp.origin}")
+            if (a.changed) log(appliedLine(ev))
             if (a.changed || a.conflicts.isNotEmpty()) {
                 update {
                     it.copy(
@@ -217,6 +222,7 @@ class SyncEngine(
             val ev = l.fetchNote(p, options.queryTimeoutMs)
             if (ev == null) { log("catch-up: hub listed $p but returned nothing"); continue }
             val a = core.onIncoming(ev)
+            if (a.changed) log("catch-up: ${appliedLine(ev)}")
             if (a.changed) { applied++; changed += p }
             notes += SyncNotices.fromIncoming(ev, a, core.device)
             conflicts += a.conflicts.size
@@ -257,7 +263,7 @@ class SyncEngine(
         for (ev in evs) {
             try {
                 l.publish(ev)
-                log("published ${ev.path} v${ev.stamp.version}${if (ev.stamp.deleted) " (delete)" else ""}")
+                log(publishedLine(ev))
                 update {
                     it.copy(
                         published = it.published + 1,
@@ -281,3 +287,11 @@ class SyncEngine(
         }
     }
 }
+
+/** `published <path> vN by <writer> (<cause>)[ (delete)]` (same as the Rust agent). */
+fun publishedLine(ev: NoteEvent): String =
+    "published ${ev.path} v${ev.stamp.version} by ${ev.stamp.writerStr} (${ev.stamp.causeStr})${if (ev.stamp.deleted) " (delete)" else ""}"
+
+/** `applied <path> vN from <origin> by <writer> (<cause>)[ (delete)]`. */
+fun appliedLine(ev: NoteEvent): String =
+    "applied ${ev.path} v${ev.stamp.version} from ${ev.stamp.origin} by ${ev.stamp.writerStr} (${ev.stamp.causeStr})${if (ev.stamp.deleted) " (delete)" else ""}"

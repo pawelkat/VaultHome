@@ -33,8 +33,47 @@ class SyncCore(
     var maxDelete: Int = DEFAULT_MAX_DELETE,
     var minFiles: Int = DEFAULT_MIN_FILES,
     private val now: () -> Long = System::currentTimeMillis,
+    /** Program part of the writer label of writes this app makes (`<device>/vaulthome`). */
+    val program: String = DEFAULT_PROGRAM,
+    /** Log sink for conflict details (the engine passes Logcat). */
+    var log: (String) -> Unit = {},
 ) {
     private var dirty = false
+
+    /** First scan of a fresh state: untracked files are [Cause.SEED]. */
+    var seeding: Boolean = state.entries.isEmpty()
+
+    /** rel -> sha of writes the app itself made outside the sync core ([noteOwnWrite]); consumed by the next scan. */
+    private val ownWrites = HashMap<String, String>()
+
+    /** `<device>/<program>`. */
+    val ownWriter: String get() = "$device/$program"
+
+    /**
+     * The app is about to write [bytes] to [rel] itself (not through an incoming event): the change the next scan
+     * finds is published as `<device>/<program>` (`local-edit`) instead of `<device>/external`.
+     */
+    fun noteOwnWrite(rel: String, bytes: ByteArray?) {
+        ownWrites[rel] = bytes?.let { sha256Hex(it) } ?: ""
+    }
+
+    /**
+     * Who changed [rel] on disk to [sha] (`null` = deleted): the app itself ([noteOwnWrite]) or someone else
+     * (Obsidian, Termux, Autosync, a file manager) = `<device>/external`.
+     */
+    fun classify(rel: String, sha: String?, tracked: Boolean): Pair<String, String> {
+        val own = ownWrites[rel]
+        if (own != null && own == (sha ?: "")) {
+            ownWrites.remove(rel)
+            return ownWriter to if (sha == null) Cause.DELETE else Cause.LOCAL_EDIT
+        }
+        val cause = when {
+            sha == null -> Cause.DELETE
+            seeding && !tracked -> Cause.SEED
+            else -> Cause.EXTERNAL_EDIT
+        }
+        return "$device/external" to cause
+    }
 
     fun saveIfDirty() {
         if (dirty) {
@@ -55,7 +94,19 @@ class SyncCore(
         val disk = fs.read(path)
         if (disk is Disk.Skipped) return Applied()
         val localTs = (disk as? Disk.Present)?.mtimeMs ?: now()
-        val d = Conflict.decide(state.stamp(path), disk.sha, ev.stamp, device, localTs)
+        var d = Conflict.decide(state.stamp(path), disk.sha, ev.stamp, device, localTs)
+        val inc = ev.stamp
+        val incSha = if (inc.deleted) null else inc.sha256
+        if (d is Decision.KeepLocal || (d is Decision.Apply && d.saveLocalAs != null)) {
+            // Re-check right before making a copy: SAF reads are not atomic (a provider, Obsidian or Autosync may
+            // have been mid-write when we hashed). If the live file now holds exactly the incoming bytes there is
+            // no conflict; record the stamp (rule 1 of decide, applied to the fresh read).
+            val fresh = fs.read(path)
+            if (fresh !is Disk.Skipped && fresh.sha == incSha) {
+                log("conflict on $path avoided: disk now holds the incoming bytes (${ev.size} B ${short(inc.sha256)}); adopted")
+                d = Decision.Adopt
+            }
+        }
         val conflicts = ArrayList<String>()
         val publish = ArrayList<NoteEvent>()
         var changed = false
@@ -63,35 +114,59 @@ class SyncCore(
             is Decision.Ignore -> {}
             is Decision.Adopt -> record(ev.stamp)
             is Decision.Apply -> {
-                if (d.saveLocalAs != null && disk is Disk.Present) writeConflict(d.saveLocalAs, disk.bytes, conflicts, publish)
+                if (d.saveLocalAs != null && disk is Disk.Present) {
+                    val info = ConflictInfo(path, inc.sha256, ev.size, inc.origin, disk.sha256, disk.bytes.size.toLong(), device)
+                    writeConflict(d.saveLocalAs, disk.bytes, info, conflicts, publish)
+                }
                 val c = ev.content
                 if (c != null && !ev.stamp.deleted) fs.writeAtomic(path, c) else fs.remove(path)
                 changed = true
                 record(ev.stamp)
             }
             is Decision.KeepLocal -> {
-                val c = ev.content
-                if (d.saveIncomingAs != null && c != null) writeConflict(d.saveIncomingAs, c, conflicts, publish)
+                val (writer, why) = classify(path, disk.sha, state.stamp(path) != null)
+                val local = d.local.by(writer, why)
                 val content = (disk as? Disk.Present)?.bytes
-                record(d.local)
-                publish += NoteEvent(FORMAT_VERSION, d.local, content)
+                val c = ev.content
+                if (d.saveIncomingAs != null && c != null) {
+                    val info = ConflictInfo(path, local.sha256, content?.size?.toLong() ?: 0L, device, inc.sha256, c.size.toLong(), inc.origin)
+                    writeConflict(d.saveIncomingAs, c, info, conflicts, publish)
+                }
+                record(local)
+                publish += NoteEvent(FORMAT_VERSION, local, content)
             }
         }
         return Applied(d, changed, conflicts, publish)
     }
 
-    private fun writeConflict(name: String, bytes: ByteArray, conflicts: MutableList<String>, publish: MutableList<NoteEvent>) {
-        val slot = fs.conflictSlot(name, bytes) ?: return
+    /** Save the losing bytes under a conflict name and publish the copy; never for identical bytes. */
+    private fun writeConflict(name: String, bytes: ByteArray, info: ConflictInfo, conflicts: MutableList<String>, publish: MutableList<NoteEvent>) {
+        if (info.loserSha256 == info.winnerSha256) {
+            log("conflict on ${info.of}: both sides identical, no copy")
+            return
+        }
+        val slot = fs.conflictSlot(name, bytes)
+        if (slot == null) {
+            log("conflict on ${info.of}: copy $name already holds these bytes")
+            return
+        }
         fs.writeAtomic(slot, bytes)
+        log(
+            "conflict on ${info.of}: kept ${info.winnerSize} B ${short(info.winnerSha256)} from ${info.winnerOrigin}, " +
+                "saved ${info.loserSize} B ${short(info.loserSha256)} from ${info.loserOrigin} as $slot by $ownWriter",
+        )
+        if (info.keptSmaller) log("WARN conflict on ${info.of}: the live path keeps the SMALLER side (${info.winnerSize} B < ${info.loserSize} B); check $slot")
         conflicts += slot
-        onLocal(slot)?.let { publish += it }
+        localChange(slot, trustStat = false, label = ownWriter to Cause.CONFLICT_COPY)?.let { publish += it.withConflict(info) }
     }
+
+    private fun short(sha: String) = sha.take(12)
 
     /** A local path may have changed. Always hashes. Returns the event to publish, if any. */
     fun onLocal(rel: String): NoteEvent? = localChange(rel, trustStat = false)
 
     /** `trustStat`: skip hashing when mtime+size match what was recorded (periodic rescans only). */
-    private fun localChange(rel: String, trustStat: Boolean): NoteEvent? {
+    private fun localChange(rel: String, trustStat: Boolean, label: Pair<String, String>? = null): NoteEvent? {
         if (VaultRules.isIgnored(rel) || !VaultKey.isValid(rel)) return null
         val entry = state.entries[rel]
         if (trustStat && entry != null && !entry.stamp.deleted) {
@@ -107,14 +182,17 @@ class SyncCore(
                 if (prevSha == disk.sha256) {
                     // Content unchanged (touch, or our own write): refresh the stat cache.
                     record(prev)
+                    if (ownWrites[rel] == disk.sha256) ownWrites.remove(rel)
                     return null
                 }
+                val (writer, why) = label ?: classify(rel, disk.sha256, prev != null)
                 // ts = file mtime (the edit time); only a tie-break after the version counter.
                 val ts = if (disk.mtimeMs > 0) disk.mtimeMs else now()
-                NoteEvent.put(rel, disk.bytes, device, version, prevSha, ts).also { record(it.stamp) }
+                NoteEvent.put(rel, disk.bytes, device, version, prevSha, ts).by(writer, why).also { record(it.stamp) }
             }
             is Disk.Absent -> if (prev != null && !prev.deleted) {
-                NoteEvent.delete(rel, device, version, prevSha, now()).also { record(it.stamp) }
+                val (writer, why) = label ?: classify(rel, null, true)
+                NoteEvent.delete(rel, device, version, prevSha, now()).by(writer, why).also { record(it.stamp) }
             } else {
                 null
             }
@@ -174,6 +252,8 @@ class SyncCore(
         }
         val republish = ArrayList<String>()
         for ((p, e) in state.entries) {
+            // Tracked before a filter change (rclone conflict files): never sent again.
+            if (VaultRules.isIgnored(p)) continue
             val h = hubMap[p]
             if (h == null || e.stamp.beats(h)) republish += p
         }
@@ -199,7 +279,10 @@ class SyncCore(
 
     /** Rebuild the event for our recorded state of [rel]; if the disk moved on, treat it as a local change. */
     fun republish(rel: String): NoteEvent? {
-        val st = state.stamp(rel) ?: return null
+        if (VaultRules.isIgnored(rel)) return null
+        val recorded = state.stamp(rel) ?: return null
+        // Keep who made this state; mark that it came back during catch-up.
+        val st = recorded.by(recorded.writer ?: "$device/unknown", Cause.CATCHUP_REPUBLISH)
         val disk = fs.read(rel)
         return when {
             disk is Disk.Absent && st.deleted -> NoteEvent(FORMAT_VERSION, st, null)
@@ -212,5 +295,6 @@ class SyncCore(
     companion object {
         const val DEFAULT_MAX_DELETE = 50
         const val DEFAULT_MIN_FILES = 3
+        const val DEFAULT_PROGRAM = "vaulthome"
     }
 }

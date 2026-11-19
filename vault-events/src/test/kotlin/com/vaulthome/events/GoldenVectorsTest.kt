@@ -87,6 +87,34 @@ class GoldenVectorsTest {
     }
 
     @Test
+    fun labelledEventsAreByteIdentical() {
+        val all = arr("labelled_events")
+        assertEquals(4, all.size)
+        for (v in all) {
+            val name = v.s("name")
+            val content = v.s("content_b64")?.let { Base64.getDecoder().decode(it) }
+            val path = v.s("path")!!
+            val origin = v.s("origin")!!
+            val version = v["version"]!!.jsonPrimitive.long
+            val ts = v["ts_ms"]!!.jsonPrimitive.long
+            val prev = v.s("prev_sha256")
+            var ev = if (v["deleted"]!!.jsonPrimitive.boolean) NoteEvent.delete(path, origin, version, prev, ts)
+            else NoteEvent.put(path, content!!, origin, version, prev, ts)
+            ev = ev.by(v.s("writer")!!, v.s("cause")!!)
+            (v["conflict"] as? JsonObject)?.let { c ->
+                ev = ev.withConflict(
+                    ConflictInfo(
+                        c.s("of")!!, c.s("winner_sha256")!!, c["winner_size"]!!.jsonPrimitive.long, c.s("winner_origin")!!,
+                        c.s("loser_sha256")!!, c["loser_size"]!!.jsonPrimitive.long, c.s("loser_origin")!!,
+                    ),
+                )
+            }
+            assertEquals(name, v.s("encoded"), ev.encodeToString())
+            assertEquals(name, ev, NoteEvent.decode(v.s("encoded")!!.toByteArray(Charsets.UTF_8), v.s("key")))
+        }
+    }
+
+    @Test
     fun decodeAcceptsAndRejectsLikeRust() {
         val all = arr("decode")
         assertEquals(13, all.size)
