@@ -1,5 +1,6 @@
 package com.vaulthome.events
 
+import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
@@ -34,6 +35,10 @@ data class EngineOptions(
     val retryMs: Long = 10_000,
     /** Live notes arriving within this window are posted together (one summary when many). */
     val notifyDebounceMs: Long = 2_000,
+    /** Inline limit and chunking for large files (see [Blob]). */
+    val transfer: TransferOptions = TransferOptions(),
+    /** Partial blob downloads (app cache, outside the vault); `null` = a temp dir per device. */
+    val partialDir: File? = null,
 )
 
 /**
@@ -67,6 +72,14 @@ class SyncEngine(
         Thread(r, "vault-events").apply { isDaemon = true }
     }
     private val tasks = ArrayList<ScheduledFuture<*>>()
+    /** Files this device published as blob references, served to the hub / other devices. */
+    private val outgoing = OutgoingCache()
+    /** Blob downloads run here so the worker keeps handling notes; results are applied on the worker. */
+    private val transfers = Executors.newSingleThreadExecutor { r -> Thread(r, "vault-events-blobs").apply { isDaemon = true } }
+    /** `path\nsha` of blob fetches in flight (worker only). */
+    private val fetching = HashSet<String>()
+    private val partialDir: File = options.partialDir
+        ?: File(System.getProperty("java.io.tmpdir"), "vault-events-partial-${core.device.filter { it.isLetterOrDigit() }}")
     private var link: EventLink? = null
     private var linked = 0
     @Volatile private var stopped = false
@@ -103,6 +116,7 @@ class SyncEngine(
             runCatching { core.saveIfDirty() }
             runCatching { link?.close() }
             link = null
+            transfers.shutdownNow()
             update { it.copy(phase = EngineStatus.Phase.STOPPED, routers = 0, peers = 0) }
         }
         worker.shutdown()
@@ -131,6 +145,11 @@ class SyncEngine(
         } catch (e: Throwable) {
             update { it.copy(phase = EngineStatus.Phase.ERROR, lastError = "subscribe: ${e.message}") }
             return
+        }
+        try {
+            l.serveBlobs { sha, i, cs -> outgoing.chunk(sha, i, cs) }
+        } catch (e: Throwable) {
+            log("serving blobs failed: $e")
         }
         linked = l.routerCount() + l.peerCount()
         update { it.copy(phase = EngineStatus.Phase.CONNECTED, routers = l.routerCount(), peers = l.peerCount(), lastError = null) }
@@ -181,6 +200,43 @@ class SyncEngine(
             update { it.copy(lastError = "bad event on $key: ${e.kind}") }
             return
         }
+        if (ev.isBlobRef && runCatching { core.needsBytes(ev) }.getOrDefault(true)) {
+            fetchThenApply(ev)
+            return
+        }
+        applyIncoming(ev)
+    }
+
+    private fun fetcher(l: EventLink) = BlobFetcher(partialDir, options.transfer, { sha, i, cs -> l.fetchChunk(sha, i, cs, options.transfer.chunkTimeoutMs) })
+
+    /** Pull the bytes of blob reference [ev] off the worker, then apply the verified event on the worker. */
+    private fun fetchThenApply(ev: NoteEvent) {
+        val l = link ?: return
+        val id = "${ev.path}\n${ev.stamp.sha256}"
+        if (!fetching.add(id)) return
+        val b = ev.blob!!
+        log("fetching blob ${ev.stamp.sha256.take(12)} for ${ev.path} v${ev.stamp.version} from ${ev.stamp.origin}: ${b.size} B in ${b.chunks} chunks")
+        try {
+            transfers.execute {
+                val full = try {
+                    val (full, f) = fetcher(l).fill(ev)
+                    log(fetchedLine(ev, f))
+                    full
+                } catch (e: Throwable) {
+                    log("blob for ${ev.path} not fetched: ${e.message}; catch-up retries")
+                    null
+                }
+                if (!stopped) worker.execute {
+                    fetching.remove(id)
+                    if (full != null) applyIncoming(full)
+                }
+            }
+        } catch (e: Throwable) {
+            fetching.remove(id)
+        }
+    }
+
+    private fun applyIncoming(ev: NoteEvent) {
         guarded("apply ${ev.path}") {
             val a = core.onIncoming(ev)
             if (a.changed) log(appliedLine(ev))
@@ -219,8 +275,18 @@ class SyncEngine(
         for (p in fetch) {
             val hubStamp = byPath[p]
             if (hubStamp != null && core.adoptIfSame(hubStamp)) { adopted++; continue }
-            val ev = l.fetchNote(p, options.queryTimeoutMs)
+            var ev = l.fetchNote(p, options.queryTimeoutMs)
             if (ev == null) { log("catch-up: hub listed $p but returned nothing"); continue }
+            if (ev.isBlobRef && core.needsBytes(ev)) {
+                ev = try {
+                    val (full, f) = fetcher(l).fill(ev)
+                    log("catch-up: ${fetchedLine(ev, f)}")
+                    full
+                } catch (e: Throwable) {
+                    log("catch-up: blob for $p not fetched: ${e.message}; next pass retries")
+                    continue
+                }
+            }
             val a = core.onIncoming(ev)
             if (a.changed) log("catch-up: ${appliedLine(ev)}")
             if (a.changed) { applied++; changed += p }
@@ -262,8 +328,12 @@ class SyncEngine(
         val l = link ?: return
         for (ev in evs) {
             try {
-                l.publish(ev)
-                log(publishedLine(ev))
+                val t = options.transfer
+                val ref = ev.toBlobRef(t.inlineMax, t.chunkSize)
+                if (ref != null) outgoing.insert(ev.stamp.sha256, ev.content!!)
+                l.publish(ref ?: ev)
+                val b = ref?.blob
+                log(publishedLine(ev) + if (b != null) " as blob (${b.size} B, ${b.chunks} chunks of ${b.chunkSize} B, sha256 ${ev.stamp.sha256.take(12)})" else "")
                 update {
                     it.copy(
                         published = it.published + 1,
@@ -287,6 +357,10 @@ class SyncEngine(
         }
     }
 }
+
+/** `fetched blob <sha12> for <path>: N B, M chunks in T ms (...), sha256 ok` (same as the Rust agent). */
+fun fetchedLine(ev: NoteEvent, f: Fetched): String =
+    "fetched blob ${ev.stamp.sha256.take(12)} for ${ev.path}: ${f.bytes.size} B, ${f.chunks} chunks in ${f.elapsedMs} ms (${f.resumed} resumed, ${f.retries} retried), sha256 ok"
 
 /** `published <path> vN by <writer> (<cause>)[ (delete)]` (same as the Rust agent). */
 fun publishedLine(ev: NoteEvent): String =

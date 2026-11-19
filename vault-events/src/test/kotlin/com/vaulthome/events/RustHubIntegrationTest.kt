@@ -42,7 +42,10 @@ class RustHubIntegrationTest {
             SyncCore(FileVaultTree(dir), dev, AgentState(dev, dir.path), File(tmp.root, "$dev-state.json")),
             cfg,
             openLink = { ZenohLink.open(it) },
-            options = EngineOptions(rescanIntervalMs = 300, linkCheckMs = 500, retryMs = 500, queryTimeoutMs = 3_000),
+            options = EngineOptions(
+                rescanIntervalMs = 300, linkCheckMs = 500, retryMs = 500, queryTimeoutMs = 3_000,
+                partialDir = File(tmp.root, "partial-$dev"),
+            ),
             log = { println("[$dev] $it") },
         )
         engines += e
@@ -104,6 +107,33 @@ class RustHubIntegrationTest {
         assertEquals(2L, one.version)
         assertTrue(idx.stamps.single { it.path == "Notes/live from rust.md" }.deleted)
         assertTrue(eb.status.phase == EngineStatus.Phase.CONNECTED)
+
+        // Large files (> 1 MiB) both ways: blob reference + 256 KiB chunks through the Rust hub.
+        val fromS24 = ByteArray(2_500_000) { (it * 13 % 241).toByte() }
+        File(b, "Daily").mkdirs()
+        File(b, "Daily/s24 photo.jpg").writeBytes(fromS24)
+        waitFor("2.5 MB Kotlin -> Rust agent", 60_000) {
+            File(a, "Daily/s24 photo.jpg").let { it.isFile && it.length() == fromS24.size.toLong() && sha256Hex(it.readBytes()) == sha256Hex(fromS24) }
+        }
+        val fromBox = ByteArray(3_000_000) { (it * 17 % 239).toByte() }
+        File(a, "Daily/box photo.jpg").writeBytes(fromBox)
+        waitFor("3 MB Rust agent -> Kotlin", 60_000) {
+            File(b, "Daily/box photo.jpg").let { it.isFile && it.length() == fromBox.size.toLong() && sha256Hex(it.readBytes()) == sha256Hex(fromBox) }
+        }
+        val hubLog = File(tmp.root, "hub.log").readText()
+        assertTrue(hubLog, hubLog.contains("pulled blob ${sha256Hex(fromS24).take(12)} for Daily/s24 photo.jpg"))
+        assertTrue(hubLog, hubLog.contains("[blob 3000000 B, sha256 ${sha256Hex(fromBox).take(12)}]"))
+        ZenohLink.open(LinkConfig(LinkMode.CLIENT, listOf(ep))).use { l ->
+            val ref = l.fetchNote("Daily/s24 photo.jpg", 3_000)!!
+            assertTrue("hub replies with a reference", ref.isBlobRef)
+            // The hub serves the chunks itself.
+            val c0 = l.fetchChunk(ref.stamp.sha256, 0, Blob.DEFAULT_CHUNK_SIZE, 3_000)!!
+            assertTrue(c0.contentEquals(fromS24.copyOf(Blob.DEFAULT_CHUNK_SIZE.toInt())))
+        }
+        // Notes still flow after the photos (sessions not dropped).
+        b.put("Notes/after photos.md", "still linked\n")
+        waitFor("note after photos reaches Rust agent") { File(a, "Notes/after photos.md").isFile }
+        assertTrue(File(b, "Daily").listFiles()!!.none { it.name.contains("(conflict ") })
     }
 
     @Test

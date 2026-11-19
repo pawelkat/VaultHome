@@ -137,8 +137,34 @@ data class ConflictInfo(
     }
 }
 
+/**
+ * Size of a file that travels in chunks instead of inline (Rust `event::BlobInfo`): the event carries no
+ * `content`, receivers pull `vault/blob/<sha256>/<i>` (see [Blob]).
+ */
+data class BlobInfo(val size: Long, val chunkSize: Long, val chunks: Long) {
+    val isValid: Boolean
+        get() = size >= 0 && chunkSize in Blob.MIN_CHUNK_SIZE..Blob.MAX_CHUNK_SIZE && chunks == Blob.chunkCount(size, chunkSize)
+
+    internal fun write(sb: StringBuilder) {
+        sb.append("{\"size\":").append(size)
+        sb.append(",\"chunk_size\":").append(chunkSize)
+        sb.append(",\"chunks\":").append(chunks)
+        sb.append('}')
+    }
+
+    companion object {
+        fun of(size: Long, chunkSize: Long) = BlobInfo(size, chunkSize, Blob.chunkCount(size, chunkSize))
+
+        internal fun fromJson(o: JsonObject): BlobInfo = BlobInfo(
+            size = JsonIn.u64(o, "size") ?: throw JsonIn.Bad("blob.size"),
+            chunkSize = JsonIn.u64(o, "chunk_size") ?: throw JsonIn.Bad("blob.chunk_size"),
+            chunks = JsonIn.u64(o, "chunks") ?: throw JsonIn.Bad("blob.chunks"),
+        )
+    }
+}
+
 /** Rust `event::DecodeError` variants. */
-enum class DecodeErrorKind { Json, UnsupportedFormat, BadPath, KeyMismatch, HashMismatch, MissingContent, TombstoneWithContent }
+enum class DecodeErrorKind { Json, UnsupportedFormat, BadPath, KeyMismatch, HashMismatch, MissingContent, TombstoneWithContent, BadBlob }
 
 class DecodeException(val kind: DecodeErrorKind, message: String) : Exception("$kind: $message")
 
@@ -150,8 +176,29 @@ class NoteEvent(
     val content: ByteArray?,
     /** Set on conflict-copy events only. */
     val conflict: ConflictInfo? = null,
+    /** Set instead of [content] when the bytes travel in chunks. */
+    val blob: BlobInfo? = null,
 ) {
     val path: String get() = stamp.path
+
+    /** A reference whose bytes still have to be fetched. */
+    val isBlobRef: Boolean get() = blob != null && content == null
+
+    /** The same state as a blob reference if the content is larger than [inlineMax]; `null` = stays inline. */
+    fun toBlobRef(inlineMax: Long, chunkSize: Long): NoteEvent? {
+        val c = content ?: return null
+        if (c.size.toLong() <= inlineMax) return null
+        return NoteEvent(format, stamp, null, conflict, BlobInfo.of(c.size.toLong(), chunkSize))
+    }
+
+    /** Fill a blob reference with fetched bytes; throws [DecodeException] unless size and SHA-256 match. */
+    fun withContent(bytes: ByteArray): NoteEvent {
+        val b = blob ?: throw DecodeException(DecodeErrorKind.BadBlob, "not a blob reference")
+        if (bytes.size.toLong() != b.size || sha256Hex(bytes) != stamp.sha256) {
+            throw DecodeException(DecodeErrorKind.HashMismatch, "sha256 does not match content")
+        }
+        return NoteEvent(format, stamp, bytes, conflict, null)
+    }
 
     fun key(): String = VaultKey.pathToKey(stamp.path)
 
@@ -164,25 +211,26 @@ class NoteEvent(
         stamp.writeFields(sb, false)
         if (content != null) sb.append(",\"content\":\"").append(Base64.getEncoder().encodeToString(content)).append('"')
         if (conflict != null) { sb.append(",\"conflict\":"); conflict.write(sb) }
+        if (blob != null) { sb.append(",\"blob\":"); blob.write(sb) }
         sb.append('}')
         return sb.toString()
     }
 
     override fun equals(other: Any?): Boolean =
-        other is NoteEvent && other.format == format && other.stamp == stamp && other.conflict == conflict &&
+        other is NoteEvent && other.format == format && other.stamp == stamp && other.conflict == conflict && other.blob == blob &&
             (content?.contentEquals(other.content ?: return false) ?: (other.content == null))
 
     override fun hashCode(): Int = stamp.hashCode() * 31 + (content?.contentHashCode() ?: 0)
 
-    /** Content size in bytes (0 for a tombstone). */
-    val size: Long get() = content?.size?.toLong() ?: 0L
+    /** Content size in bytes (0 for a tombstone); a blob reference reports the referenced size. */
+    val size: Long get() = content?.size?.toLong() ?: blob?.size ?: 0L
 
     /** Same event, labelled with [writer] and [cause]. */
-    fun by(writer: String, cause: String): NoteEvent = NoteEvent(format, stamp.by(writer, cause), content, conflict)
+    fun by(writer: String, cause: String): NoteEvent = NoteEvent(format, stamp.by(writer, cause), content, conflict, blob)
 
-    fun withConflict(info: ConflictInfo): NoteEvent = NoteEvent(format, stamp, content, info)
+    fun withConflict(info: ConflictInfo): NoteEvent = NoteEvent(format, stamp, content, info, blob)
 
-    override fun toString(): String = "NoteEvent(${stamp}, ${content?.size ?: "no"} bytes)"
+    override fun toString(): String = "NoteEvent(${stamp}, ${content?.size ?: "no"} bytes${blob?.let { ", blob ${it.size} B" } ?: ""})"
 
     companion object {
         fun put(path: String, content: ByteArray, origin: String, version: Long, prevSha256: String?, tsMs: Long) =
@@ -214,6 +262,15 @@ class NoteEvent(
             } catch (e: JsonIn.Bad) {
                 throw DecodeException(DecodeErrorKind.Json, e.message ?: "bad conflict")
             }
+            val blob = try {
+                when (val b = root["blob"]) {
+                    null, is JsonNull -> null
+                    is JsonObject -> BlobInfo.fromJson(b)
+                    else -> throw JsonIn.Bad("blob: expected an object")
+                }
+            } catch (e: JsonIn.Bad) {
+                throw DecodeException(DecodeErrorKind.Json, e.message ?: "bad blob")
+            }
             val (stamp, content) = try {
                 Stamp.fromJson(root) to JsonIn.optStr(root, "content")?.let { JsonIn.base64(it) }
             } catch (e: JsonIn.Bad) {
@@ -223,6 +280,12 @@ class NoteEvent(
             if (key != null) {
                 val expect = VaultKey.pathToKey(stamp.path)
                 if (expect != key) throw DecodeException(DecodeErrorKind.KeyMismatch, "key $key does not match payload path ${stamp.path}")
+            }
+            if (blob != null) {
+                if (content != null || stamp.deleted || !blob.isValid || !isSha256Hex(stamp.sha256)) {
+                    throw DecodeException(DecodeErrorKind.BadBlob, "bad blob reference")
+                }
+                return NoteEvent(format.toInt(), stamp, null, conflict, blob)
             }
             when {
                 content != null && stamp.deleted -> throw DecodeException(DecodeErrorKind.TombstoneWithContent, "tombstone carries content")
@@ -262,6 +325,9 @@ data class IndexReply(val format: Int, val hub: String, val stamps: List<Stamp>)
         }
     }
 }
+
+/** 64 lower-case hex digits. */
+fun isSha256Hex(s: String): Boolean = s.length == 64 && s.all { it in '0'..'9' || it in 'a'..'f' }
 
 /** Lower-case hex SHA-256. */
 fun sha256Hex(bytes: ByteArray): String {

@@ -8,7 +8,10 @@ import io.zenoh.handlers.Callback
 import io.zenoh.keyexpr.KeyExpr
 import io.zenoh.pubsub.Subscriber
 import io.zenoh.qos.CongestionControl
+import io.zenoh.qos.Priority
 import io.zenoh.qos.QoS
+import io.zenoh.query.Query
+import io.zenoh.query.Queryable
 import io.zenoh.query.ConsolidationMode
 import io.zenoh.query.QueryTarget
 import io.zenoh.query.Reply
@@ -24,6 +27,7 @@ import java.util.concurrent.TimeUnit
  */
 class ZenohLink private constructor(private val session: Session) : EventLink {
     private var subscriber: Subscriber<Unit>? = null
+    private var blobQueryable: Queryable<Unit>? = null
 
     override fun subscribe(onSample: (String, ByteArray) -> Unit) {
         val ke = KeyExpr.tryFrom(VaultKey.NOTES_WILDCARD).getOrThrow()
@@ -68,6 +72,45 @@ class ZenohLink private constructor(private val session: Session) : EventLink {
         return best
     }
 
+    override fun serveBlobs(provider: (String, Long, Long) -> ByteArray?) {
+        val ke = KeyExpr.tryFrom(Blob.WILDCARD).getOrThrow()
+        blobQueryable = session.declareQueryable(ke, Callback<Query> { q ->
+            q.use {
+                val k = it.keyExpr.toString()
+                val (sha, i) = Blob.parseKey(k) ?: return@use
+                val cs = Blob.chunkSizeParam(runCatching { it.parameters?.get("cs") }.getOrNull())
+                val bytes = runCatching { provider(sha, i, cs) }.getOrNull() ?: return@use
+                it.reply(it.keyExpr, ZBytes.from(bytes))
+            }
+        }).getOrThrow()
+    }
+
+    /**
+     * One chunk: best-matching queryable first, then all (the hub may not have pulled the blob yet while the
+     * sender still has it). Low priority and DROP congestion control; replies inherit both.
+     */
+    override fun fetchChunk(sha: String, index: Long, chunkSize: Long, timeoutMs: Long): ByteArray? {
+        for (target in listOf(QueryTarget.BEST_MATCHING, QueryTarget.ALL)) {
+            var out: ByteArray? = null
+            val done = CountDownLatch(1)
+            val sel = Selector.tryFrom(Blob.selector(sha, index, chunkSize)).getOrThrow()
+            session.get(
+                sel,
+                callback = Callback<Reply> { r ->
+                    r.result.onSuccess { s -> synchronized(this) { if (out == null) out = s.payload.toBytes().takeIf { it.isNotEmpty() } } }
+                },
+                timeout = Duration.ofMillis(timeoutMs),
+                target = target,
+                consolidation = ConsolidationMode.NONE,
+                onClose = { done.countDown() },
+                qos = QoS(congestionControl = CongestionControl.DROP, priority = Priority.DATA_LOW),
+            ).getOrThrow()
+            done.await(timeoutMs + 2_000, TimeUnit.MILLISECONDS)
+            synchronized(this) { out }?.let { return it }
+        }
+        return null
+    }
+
     override fun routerCount(): Int = session.info().routersZid().getOrNull()?.size ?: 0
 
     override fun peerCount(): Int = session.info().peersZid().getOrNull()?.size ?: 0
@@ -75,6 +118,8 @@ class ZenohLink private constructor(private val session: Session) : EventLink {
     override fun close() {
         runCatching { subscriber?.close() }
         subscriber = null
+        runCatching { blobQueryable?.close() }
+        blobQueryable = null
         runCatching { session.close() }
     }
 

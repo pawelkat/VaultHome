@@ -46,4 +46,13 @@ interface EventLink : AutoCloseable {
 
     /** Peers this session is linked to right now (router/peer mode: other routers show up as routers). */
     fun peerCount(): Int
+
+    /**
+     * Answer chunk queries on [Blob.WILDCARD] with [provider] `(sha256, index, chunkSize) -> bytes or null`
+     * (called on a transport thread). Default: not served.
+     */
+    fun serveBlobs(provider: (String, Long, Long) -> ByteArray?) {}
+
+    /** One chunk of blob [sha]; `null` = nobody answered within [timeoutMs]. Default: none. */
+    fun fetchChunk(sha: String, index: Long, chunkSize: Long, timeoutMs: Long): ByteArray? = null
 }

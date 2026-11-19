@@ -301,4 +301,23 @@ class SyncCoreTest {
         // Unknown future keys are ignored.
         NoteEvent.decode(old.replace("\"content\"", "\"future\":{\"x\":1},\"content\"").toByteArray(), null)
     }
+
+    @Test
+    fun blobReferenceIsNeverAppliedWithoutBytes() {
+        val dir = tmp.newFolder("blobcore")
+        val c = SyncCore(FileVaultTree(dir), "s24", AgentState("s24", dir.path))
+        val big = ByteArray(5000) { 9 }
+        val r = NoteEvent.put("Daily/p.jpg", big, "nitro5", 1, null, 1).toBlobRef(1000, 4096)!!
+        org.junit.Assert.assertTrue(c.needsBytes(r))
+        try {
+            c.onIncoming(r)
+            org.junit.Assert.fail("applied without bytes")
+        } catch (e: IllegalStateException) {
+        }
+        org.junit.Assert.assertFalse(java.io.File(dir, "Daily/p.jpg").exists())
+        org.junit.Assert.assertTrue(c.onIncoming(r.withContent(big)).changed)
+        org.junit.Assert.assertArrayEquals(big, java.io.File(dir, "Daily/p.jpg").readBytes())
+        org.junit.Assert.assertFalse("same state: stamp is enough", c.needsBytes(r))
+        org.junit.Assert.assertEquals(Decision.Ignore, c.onIncoming(r).decision)
+    }
 }

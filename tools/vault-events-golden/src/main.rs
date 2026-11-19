@@ -71,6 +71,25 @@ fn main() {
     cc.conflict = Some(ConflictInfo { of: "Daily/p.jpg".into(), winner_sha256: sha256_hex(b"w"), winner_size: 1,
         winner_origin: "s24".into(), loser_sha256: sha256_hex(&[1, 2, 3]), loser_size: 3, loser_origin: "nitro5".into() });
     addl("conflict_copy", cc);
+    // --- blob references (large files travel in chunks)
+    let mut blobs = Vec::new();
+    let mut addb = |name: &str, e: NoteEvent, inline_max: u64, cs: u64| {
+        let r = e.to_blob_ref(inline_max, cs).expect("above the inline limit");
+        blobs.push(json!({"name":name,"key":r.key().unwrap(),"encoded":String::from_utf8(r.encode()).unwrap(),
+            "inline_max":inline_max,"chunk_size":cs,"path":e.stamp.path,"version":e.stamp.version,"ts_ms":e.stamp.ts_ms,
+            "origin":e.stamp.origin,"prev_sha256":e.stamp.prev_sha256,"writer":e.stamp.writer,"cause":e.stamp.cause,
+            "content_b64":e.content.as_ref().map(|c| b64(c)),"conflict":e.conflict}));
+    };
+    let photo: Vec<u8> = (0..10_000u32).map(|i| (i * 7 % 251) as u8).collect();
+    addb("photo", NoteEvent::put("Daily/2026-11-19 photo.jpg", photo.clone(), "nitro5", 3, Some(sha256_hex(b"old")), day)
+        .by("nitro5/external", cause::EXTERNAL_EDIT), 4096, 4096);
+    addb("photo_exact_chunks", NoteEvent::put("Attachments /p #1.png", photo[..8192].to_vec(), "s24", 1, None, 5)
+        .by("s24/vaulthome", cause::LOCAL_EDIT), 4096, 4096);
+    let mut bc = NoteEvent::put("Daily/p (conflict s24 2026-11-19).jpg", photo.clone(), "box", 1, None, day)
+        .by("box/agent", cause::CONFLICT_COPY);
+    bc.conflict = Some(ConflictInfo { of: "Daily/p.jpg".into(), winner_sha256: sha256_hex(b"w"), winner_size: 1,
+        winner_origin: "box".into(), loser_sha256: sha256_hex(&photo), loser_size: photo.len() as u64, loser_origin: "s24".into() });
+    addb("conflict_copy_blob", bc, 1024, 262144);
     // --- decode rejects (payload strings)
     let good = String::from_utf8(NoteEvent::put("a.md", b"hi".to_vec(), "box", 1, None, 7).encode()).unwrap();
     let mut rejects = Vec::new();
@@ -90,6 +109,18 @@ fn main() {
     variants.push(("{\"format\":1,\"path\":\"t.md\",\"version\":2,\"ts_ms\":3,\"origin\":\"x\",\"deleted\":true}".into(), Some("vault/notes/t.md")));
     let mut v: Value = serde_json::from_str(&good).unwrap(); v["prev_sha256"] = Value::Null; v["extra"] = 5.into(); variants.push((v.to_string(), Some("vault/notes/a.md")));
     let mut v: Value = serde_json::from_str(&good).unwrap(); v["content"] = Value::Null; v["deleted"] = true.into(); v["sha256"] = "".into(); variants.push((v.to_string(), None));
+    // blob references: valid, and each inconsistency
+    let bref = String::from_utf8(NoteEvent::put("big.bin", vec![1u8; 5000], "box", 1, None, 7).to_blob_ref(1024, 4096).unwrap().encode()).unwrap();
+    variants.push((bref.clone(), Some("vault/notes/big.bin")));
+    let mut v: Value = serde_json::from_str(&bref).unwrap(); v["content"] = "aGk=".into(); variants.push((v.to_string(), None));
+    let mut v: Value = serde_json::from_str(&bref).unwrap(); v["deleted"] = true.into(); variants.push((v.to_string(), None));
+    let mut v: Value = serde_json::from_str(&bref).unwrap(); v["blob"]["chunks"] = 3.into(); variants.push((v.to_string(), None));
+    let mut v: Value = serde_json::from_str(&bref).unwrap(); v["blob"]["chunk_size"] = 1.into(); v["blob"]["chunks"] = 5000.into(); variants.push((v.to_string(), None));
+    let mut v: Value = serde_json::from_str(&bref).unwrap(); v["sha256"] = "ABC".into(); variants.push((v.to_string(), None));
+    let mut v: Value = serde_json::from_str(&bref).unwrap(); v["blob"] = 5.into(); variants.push((v.to_string(), None));
+    let mut v: Value = serde_json::from_str(&bref).unwrap(); v["blob"].as_object_mut().unwrap().remove("chunks"); variants.push((v.to_string(), None));
+    // what an older build sees: no blob, no content
+    let mut v: Value = serde_json::from_str(&bref).unwrap(); v.as_object_mut().unwrap().remove("blob"); variants.push((v.to_string(), None));
     for (payload, k) in variants {
         let r = NoteEvent::decode(payload.as_bytes(), k);
         rejects.push(match r {
@@ -136,7 +167,7 @@ fn main() {
     let idx = IndexReply { format: 1, hub: "box".into(), stamps: vec![p("v1","box",1,None,day), d("s24",3,Some("v2"),day+20)] };
     let out = json!({
         "source":"VaultSearch crates/vault-events (feat/vault-events-stage1)",
-        "keys":keys,"key_decode":key_decode,"events":events,"labelled_events":labelled,"decode":rejects,"beats":beats,
+        "keys":keys,"key_decode":key_decode,"events":events,"labelled_events":labelled,"blob_events":blobs,"decode":rejects,"beats":beats,
         "dates":dates,"conflict_names":names,"decide":decide,"ignored":ign,
         "index_reply":serde_json::to_string(&idx).unwrap(),
     });

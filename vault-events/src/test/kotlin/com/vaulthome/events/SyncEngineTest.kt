@@ -19,13 +19,17 @@ class SyncEngineTest {
     class Bus {
         val stored = HashMap<String, NoteEvent>()
         val subs = CopyOnWriteArrayList<(String, ByteArray) -> Unit>()
+        val blobServers = CopyOnWriteArrayList<(String, Long, Long) -> ByteArray?>()
         var puts = 0
+        var maxPut = 0
+        var chunkRequests = 0
 
         fun link() = object : EventLink {
             override fun subscribe(onSample: (String, ByteArray) -> Unit) { subs += onSample }
             override fun publish(ev: NoteEvent) {
                 synchronized(this@Bus) {
                     puts++
+                    maxPut = maxOf(maxPut, ev.encode().size)
                     val cur = stored[ev.path]
                     if (cur == null || ev.stamp.beats(cur.stamp)) stored[ev.path] = ev
                 }
@@ -35,6 +39,11 @@ class SyncEngineTest {
             override fun fetchNote(path: String, timeoutMs: Long) = synchronized(this@Bus) { stored[path] }
             override fun routerCount() = 1
             override fun peerCount() = 0
+            override fun serveBlobs(provider: (String, Long, Long) -> ByteArray?) { blobServers += provider }
+            override fun fetchChunk(sha: String, index: Long, chunkSize: Long, timeoutMs: Long): ByteArray? {
+                synchronized(this@Bus) { chunkRequests++ }
+                return blobServers.firstNotNullOfOrNull { it(sha, index, chunkSize) }
+            }
             override fun close() {}
         }
     }
@@ -43,7 +52,10 @@ class SyncEngineTest {
         SyncCore(FileVaultTree(dir), dev, AgentState(dev, dir.path)),
         LinkConfig(LinkMode.CLIENT, listOf("tcp/127.0.0.1:1")),
         openLink = { bus.link() },
-        options = EngineOptions(rescanIntervalMs = 100, catchupIntervalMs = 60_000, linkCheckMs = 1_000),
+        options = EngineOptions(
+            rescanIntervalMs = 100, catchupIntervalMs = 60_000, linkCheckMs = 1_000,
+            partialDir = File(tmp.root, "partial-$dev"),
+        ),
     )
 
     private fun waitFor(ms: Long = 5_000, cond: () -> Boolean) {
@@ -78,5 +90,29 @@ class SyncEngineTest {
         assertTrue(ea.status.applied >= 1 && eb.status.published >= 1)
         ea.stop(); eb.stop()
         assertTrue(ea.awaitStopped(2_000) && eb.awaitStopped(2_000))
+    }
+
+    @Test
+    fun largeFileTravelsAsBlobReferencePlusChunks() {
+        val bus = Bus()
+        val a = tmp.newFolder("ba"); val b = tmp.newFolder("bb")
+        File(a, "Daily").mkdirs(); File(b, "Daily").mkdirs()
+        val ea = engine(bus, a, "s24").also { it.start() }
+        val eb = engine(bus, b, "box").also { it.start() }
+        Thread.sleep(200)
+        val photo = ByteArray(3_000_000) { (it * 7 % 253).toByte() }
+        File(a, "Daily/photo.jpg").writeBytes(photo)
+        waitFor(10_000) { File(b, "Daily/photo.jpg").let { it.isFile && it.length() == photo.size.toLong() && sha256Hex(it.readBytes()) == sha256Hex(photo) } }
+        val stored = bus.stored["Daily/photo.jpg"]!!
+        assertTrue("stored as a reference", stored.isBlobRef)
+        assertEquals(12L, stored.blob!!.chunks)
+        assertTrue("no put carried the photo (max ${bus.maxPut} B)", bus.maxPut < 4096)
+        assertTrue(bus.chunkRequests >= 12)
+        assertTrue("partial files cleaned up", File(tmp.root, "partial-box").listFiles().orEmpty().isEmpty())
+        // A late joiner gets it through catch-up.
+        val c = tmp.newFolder("bc")
+        val ec = engine(bus, c, "nitro5").also { it.start() }
+        waitFor(10_000) { File(c, "Daily/photo.jpg").let { it.isFile && sha256Hex(it.readBytes()) == sha256Hex(photo) } }
+        listOf(ea, eb, ec).forEach { it.stop() }
     }
 }

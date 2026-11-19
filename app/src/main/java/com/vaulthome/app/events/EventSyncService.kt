@@ -22,6 +22,7 @@ import com.vaulthome.app.VaultHomeApp
 import com.vaulthome.events.AgentState
 import com.vaulthome.events.Disk
 import com.vaulthome.events.SharedEndpoints
+import com.vaulthome.events.EngineOptions
 import com.vaulthome.events.EngineStatus
 import com.vaulthome.events.LinkMode
 import com.vaulthome.events.SyncCore
@@ -119,6 +120,8 @@ class EventSyncService : Service() {
             core = core,
             config = link,
             openLink = { ZenohLink.open(it) },
+            // Large files: partial chunk downloads live in the app cache, never in the SAF vault tree.
+            options = EngineOptions(partialDir = File(cacheDir, "vault-events-partial")),
             onStatus = { st ->
                 mutable.value = EventSyncState(running = true, status = st, endpoint = endpoint(st.connect.ifEmpty { link.connect }))
                 notifyStatus(settings, st)

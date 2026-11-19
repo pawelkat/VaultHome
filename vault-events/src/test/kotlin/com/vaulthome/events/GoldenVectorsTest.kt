@@ -115,9 +115,35 @@ class GoldenVectorsTest {
     }
 
     @Test
+    fun blobReferencesAreByteIdentical() {
+        val all = arr("blob_events")
+        assertEquals(3, all.size)
+        for (v in all) {
+            val name = v.s("name")
+            val content = Base64.getDecoder().decode(v.s("content_b64")!!)
+            var full = NoteEvent.put(v.s("path")!!, content, v.s("origin")!!, v["version"]!!.jsonPrimitive.long, v.s("prev_sha256"), v["ts_ms"]!!.jsonPrimitive.long)
+                .by(v.s("writer")!!, v.s("cause")!!)
+            (v["conflict"] as? JsonObject)?.let { c ->
+                full = full.withConflict(
+                    ConflictInfo(
+                        c.s("of")!!, c.s("winner_sha256")!!, c["winner_size"]!!.jsonPrimitive.long, c.s("winner_origin")!!,
+                        c.s("loser_sha256")!!, c["loser_size"]!!.jsonPrimitive.long, c.s("loser_origin")!!,
+                    ),
+                )
+            }
+            val ref = full.toBlobRef(v["inline_max"]!!.jsonPrimitive.long, v["chunk_size"]!!.jsonPrimitive.long)!!
+            assertEquals(name, v.s("key"), ref.key())
+            assertEquals(name, v.s("encoded"), ref.encodeToString())
+            val back = NoteEvent.decode(v.s("encoded")!!.toByteArray(Charsets.UTF_8), v.s("key"))
+            assertEquals(name, ref, back)
+            assertEquals(name, full, back.withContent(content))
+        }
+    }
+
+    @Test
     fun decodeAcceptsAndRejectsLikeRust() {
         val all = arr("decode")
-        assertEquals(13, all.size)
+        assertEquals(22, all.size)
         for (v in all) {
             val payload = v.s("payload")!!
             val key = v.s("key")

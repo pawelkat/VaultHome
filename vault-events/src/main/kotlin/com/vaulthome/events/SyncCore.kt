@@ -87,6 +87,22 @@ class SyncCore(
         dirty = true
     }
 
+    /**
+     * Whether applying blob reference [ev] needs its bytes (it would be written or saved as a conflict copy).
+     * `false`: the stamp alone is enough (ignored, or the disk already holds these bytes).
+     */
+    fun needsBytes(ev: NoteEvent): Boolean {
+        val path = ev.stamp.path
+        if (VaultRules.isIgnored(path)) return false
+        val disk = fs.read(path)
+        if (disk is Disk.Skipped) return false
+        val localTs = (disk as? Disk.Present)?.mtimeMs ?: now()
+        return needsBytes(Conflict.decide(state.stamp(path), disk.sha, ev.stamp, device, localTs))
+    }
+
+    private fun needsBytes(d: Decision): Boolean =
+        d is Decision.Apply || (d is Decision.KeepLocal && d.saveIncomingAs != null)
+
     /** Apply one event that arrived from the network. */
     fun onIncoming(ev: NoteEvent): Applied {
         val path = ev.stamp.path
@@ -106,6 +122,10 @@ class SyncCore(
                 log("conflict on $path avoided: disk now holds the incoming bytes (${ev.size} B ${short(inc.sha256)}); adopted")
                 d = Decision.Adopt
             }
+        }
+        if (ev.isBlobRef && needsBytes(d)) {
+            // Never apply (or save as a conflict copy) a file whose bytes were not fetched and verified.
+            throw IllegalStateException("$path: blob ${short(inc.sha256)} not fetched yet")
         }
         val conflicts = ArrayList<String>()
         val publish = ArrayList<NoteEvent>()

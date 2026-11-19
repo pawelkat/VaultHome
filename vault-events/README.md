@@ -8,6 +8,20 @@ Tests: `./gradlew :vault-events:test` (golden vectors from the Rust crate, see
 `tools/vault-events-golden`). With `VAULT_EVENTS_BIN=/path/to/vault-events` the Rust hub
 integration tests run too.
 
+## Large files (blob references + chunks)
+
+Same protocol as the Rust crate (VaultSearch PR #9, `crates/vault-events/README.md`, "Large files"):
+files above 1 MiB (`TransferOptions.inlineMax`) are published as a small reference (`blob: {size,
+chunk_size, chunks}`, no `content`), kept in an in-memory [OutgoingCache] for 30 minutes, and served
+on `vault/blob/<sha256>/<i>?cs=<chunk_size>` (`ZenohLink.serveBlobs`). Incoming references are fetched
+chunk by chunk on a separate thread (`ZenohLink.fetchChunk`: best-matching queryable first, then all;
+priority DATA_LOW, congestion control DROP) into `<app cache>/vault-events-partial/<sha>.part`
+(outside the SAF tree), verified, and only then applied through the normal `writeAtomic` path. Missing
+chunks are asked for again (resumable across restarts), a hash mismatch starts over, and a reference
+whose bytes were not fetched is never applied or saved as a conflict copy. Catch-up uses the same path.
+
+Older VaultHome builds drop references as `MissingContent` (nothing written).
+
 ## Synced-note notifications
 
 `SyncNotices` decides what VaultHome shows in its "Synced notes" channel:
