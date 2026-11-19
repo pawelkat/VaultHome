@@ -218,6 +218,7 @@ class SyncEngine(
         log("fetching blob ${ev.stamp.sha256.take(12)} for ${ev.path} v${ev.stamp.version} from ${ev.stamp.origin}: ${b.size} B in ${b.chunks} chunks")
         try {
             transfers.execute {
+                waitForHub(l, ev)
                 val full = try {
                     val (full, f) = fetcher(l).fill(ev)
                     log(fetchedLine(ev, f))
@@ -234,6 +235,25 @@ class SyncEngine(
         } catch (e: Throwable) {
             fetching.remove(id)
         }
+    }
+
+    /** Wait (up to [TransferOptions.hubWaitMs]) until the hub stores live reference [ev] (Rust `wait_for_hub`). */
+    private fun waitForHub(l: EventLink, ev: NoteEvent): Boolean {
+        val t0 = System.currentTimeMillis()
+        while (!stopped) {
+            val stored = runCatching { l.fetchNote(ev.path, 3_000) }.getOrNull()
+            if (stored != null && (stored.stamp.sha256 == ev.stamp.sha256 || stored.stamp.beats(ev.stamp))) {
+                val ms = System.currentTimeMillis() - t0
+                if (ms > 1_000) log("hub has ${ev.path} after $ms ms; fetching from the hub")
+                return true
+            }
+            if (System.currentTimeMillis() - t0 >= options.transfer.hubWaitMs) {
+                log("hub has not stored ${ev.path} after ${options.transfer.hubWaitMs / 1000} s; fetching from ${ev.stamp.origin} too")
+                return false
+            }
+            Thread.sleep(1_000)
+        }
+        return false
     }
 
     private fun applyIncoming(ev: NoteEvent) {

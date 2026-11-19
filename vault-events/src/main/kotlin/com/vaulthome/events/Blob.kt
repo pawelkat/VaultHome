@@ -93,6 +93,11 @@ data class TransferOptions(
     val backoffMs: Long = 500,
     /** Chunk queries in flight per transfer (1 MiB at the default chunk size). */
     val inFlight: Int = 4,
+    /**
+     * A live blob reference: how long to wait for the hub to store the file before also asking the sending
+     * device. One copy then crosses a slow router hop instead of one per receiver.
+     */
+    val hubWaitMs: Long = 30_000,
 )
 
 /**
