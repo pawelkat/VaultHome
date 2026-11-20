@@ -26,8 +26,9 @@ object Conflict {
      * @param incoming the event's stamp
      * @param me this device's id
      * @param localTsMs mtime (or now) of the dirty local file
+     * @param ancestors hub-history SHAs of [incoming] (not including incoming itself)
      */
-    fun decide(state: Stamp?, disk: String?, incoming: Stamp, me: String, localTsMs: Long): Decision {
+    fun decide(state: Stamp?, disk: String?, incoming: Stamp, me: String, localTsMs: Long, ancestors: List<String> = emptyList()): Decision {
         val incomingSha = if (incoming.deleted) null else incoming.sha256
         val newer = state == null || incoming.beats(state)
 
@@ -37,6 +38,11 @@ object Conflict {
         if (!newer) return Decision.Ignore
         val stateSha = state?.takeIf { !it.deleted }?.sha256
         val dirty = disk != stateSha
+
+        // Stale ancestor: local file (or last accepted stamp) is an older version of incoming.
+        if (isAncestor(disk, incoming, ancestors) || (!dirty && isAncestor(stateSha, incoming, ancestors))) {
+            return Decision.Apply(null)
+        }
 
         if (dirty) {
             // 3. Concurrent local edit (or an untracked local file).
@@ -65,6 +71,12 @@ object Conflict {
                 if (fastForward || disk == null) Decision.Apply(null) else Decision.Apply(conflictName(state))
             }
         }
+    }
+
+    /** [sha] is [Stamp.prevSha256] or appears in the hub history chain. */
+    private fun isAncestor(sha: String?, incoming: Stamp, ancestors: List<String>): Boolean {
+        if (sha == null) return false
+        return incoming.prevSha256 == sha || sha in ancestors
     }
 
     /** Keep device ids filename-safe (Rust `char::is_alphanumeric` or `-` `_` `.`; else `-`). */

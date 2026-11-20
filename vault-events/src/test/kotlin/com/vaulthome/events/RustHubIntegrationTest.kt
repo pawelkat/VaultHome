@@ -46,7 +46,7 @@ class RustHubIntegrationTest {
             openLink = { ZenohLink.open(it) },
             options = EngineOptions(
                 rescanIntervalMs = 300, linkCheckMs = 500, retryMs = 500, queryTimeoutMs = 3_000,
-                partialDir = File(tmp.root, "partial-$dev"),
+                partialDir = File(tmp.root, "partial-$dev"), hubWaitMs = 0,
             ),
             log = { println("[$dev] $it"); engineLog += "[$dev] $it" },
         )

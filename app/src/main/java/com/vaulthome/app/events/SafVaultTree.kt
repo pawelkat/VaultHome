@@ -6,11 +6,16 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import com.vaulthome.events.Disk
+import com.vaulthome.events.Inspect
 import com.vaulthome.events.VaultKey
 import com.vaulthome.events.VaultRules
 import com.vaulthome.events.VaultTree
 import com.vaulthome.events.sha256Hex
+import com.vaulthome.events.sha256File
+import java.io.File
+import java.io.FileInputStream
 import java.io.IOException
+import java.nio.ByteBuffer
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -99,6 +104,69 @@ class SafVaultTree(
         }
         if (bytes.size > maxBytes) return Disk.Skipped("${bytes.size} bytes > max $maxBytes")
         return Disk.Present(sha256Hex(bytes), bytes, m.mtime, bytes.size.toLong())
+    }
+
+    override fun inspect(rel: String): Inspect {
+        if (VaultRules.isIgnored(rel)) return Inspect.Skipped("ignored path")
+        val m = find(rel) ?: return Inspect.Absent
+        if (m.isDir) return Inspect.Skipped("not a regular file")
+        if (m.size > maxBytes) return Inspect.Skipped("${m.size} bytes > max $maxBytes")
+        val sha = try {
+            resolver.openInputStream(docUri(m.id))?.use { sha256Hex(it) } ?: return Inspect.Absent
+        } catch (_: java.io.FileNotFoundException) {
+            return Inspect.Absent
+        }
+        return Inspect.File(sha, m.mtime, m.size)
+    }
+
+    override fun readRange(rel: String, offset: Long, length: Int): ByteArray? {
+        if (length < 0 || offset < 0) return null
+        val m = find(rel) ?: return null
+        if (m.isDir || offset + length > m.size) return null
+        val pfd = resolver.openFileDescriptor(docUri(m.id), "r") ?: return null
+        pfd.use {
+            FileInputStream(it.fileDescriptor).channel.use { ch ->
+                ch.position(offset)
+                val buf = ByteBuffer.allocate(length)
+                while (buf.hasRemaining()) {
+                    if (ch.read(buf) < 0) return null
+                }
+                return buf.array()
+            }
+        }
+    }
+
+    override fun writeAtomicFrom(rel: String, src: File) {
+        statCache.remove(rel)
+        fun copyTo(uri: android.net.Uri, mode: String) {
+            resolver.openOutputStream(uri, mode)?.use { out ->
+                FileInputStream(src).use { it.copyTo(out) }
+            } ?: throw IOException("cannot write $rel")
+        }
+        val existing = find(rel)
+        if (existing != null) {
+            if (existing.isDir) throw IOException("refusing to replace non-file $rel")
+            copyTo(docUri(existing.id), "wt")
+            return
+        }
+        val name = rel.substringAfterLast('/')
+        val parent = ensureDir(rel.substringBeforeLast('/', ""))
+        val tmpName = "${VaultRules.TMP_PREFIX}${System.currentTimeMillis()}-${SEQ.getAndIncrement()}"
+        val tmp = DocumentsContract.createDocument(resolver, docUri(parent), OCTET, tmpName)
+            ?: throw IOException("cannot create temp file for $rel")
+        try {
+            copyTo(tmp, "w")
+            val renamed = DocumentsContract.renameDocument(resolver, tmp, name) ?: tmp
+            val meta = meta(DocumentsContract.getDocumentId(renamed))
+            if (meta?.name != name) {
+                runCatching { DocumentsContract.deleteDocument(resolver, renamed) }
+                throw IOException("file name \"$name\" is not representable on this storage")
+            }
+            ids[rel] = meta.id
+        } catch (e: Exception) {
+            runCatching { DocumentsContract.deleteDocument(resolver, tmp) }
+            throw if (e is IOException) e else IOException("write $rel: ${e.message}", e)
+        }
     }
 
     private fun ensureDir(relDir: String): String {

@@ -100,35 +100,97 @@ data class TransferOptions(
     val hubWaitMs: Long = 30_000,
 )
 
+/** In-memory part of [OutgoingCache] (on-disk entries do not count): 8 MiB. */
+const val OUTGOING_MEM_MAX: Long = 8L shl 20
+
 /**
- * Files this device published as blob references, kept in memory so the hub (and other devices) can pull
- * them. Bounded by total bytes and age. Thread-safe (served from a Zenoh callback thread).
+ * Files this device published as blob references. The usual entry is a path on disk: chunks are
+ * read as 256 KiB ranges after a streaming SHA-256 check that the file still matches. A small
+ * in-memory bound covers tests and already-buffered tiny files; a full 64 MiB file is never held
+ * in RAM. Thread-safe (served from a Zenoh callback thread).
  */
-class OutgoingCache(private val maxBytes: Long = 64L shl 20, private val ttlMs: Long = 30 * 60_000L, private val now: () -> Long = System::currentTimeMillis) {
-    private data class Entry(val sha: String, val bytes: ByteArray, val at: Long, val path: String?)
+class OutgoingCache(private val maxBytes: Long = OUTGOING_MEM_MAX, private val ttlMs: Long = 30 * 60_000L, private val now: () -> Long = System::currentTimeMillis) {
+    private sealed class Body {
+        class Bytes(val bytes: ByteArray) : Body() { val size get() = bytes.size.toLong() }
+        class FileSrc(val file: java.io.File, var size: Long, var checkedMtime: Long?) : Body()
+    }
+    private data class Entry(val sha: String, val body: Body, val at: Long, val path: String?)
 
     private val q = ArrayDeque<Entry>()
+
+    private fun memBytes(b: Body) = (b as? Body.Bytes)?.size ?: 0L
 
     @Synchronized
     fun insert(sha: String, bytes: ByteArray, path: String? = null) {
         q.removeIf { it.sha == sha }
-        q.addLast(Entry(sha, bytes, now(), path))
-        var total = q.sumOf { it.bytes.size.toLong() }
-        while (total > maxBytes && q.size > 1) total -= q.removeFirst().bytes.size
+        q.addLast(Entry(sha, Body.Bytes(bytes), now(), path))
+        evict()
+    }
+
+    /** Serve chunks from a vault file; nothing is held in RAM. */
+    @Synchronized
+    fun insertFile(sha: String, file: java.io.File, path: String? = null) {
+        q.removeIf { it.sha == sha }
+        q.addLast(Entry(sha, Body.FileSrc(file, file.length(), null), now(), path))
+        evict()
+    }
+
+    private fun evict() {
+        var total = q.sumOf { memBytes(it.body) }
+        while (total > maxBytes && q.size > 1) {
+            val r = q.removeFirst()
+            total -= memBytes(r.body)
+        }
     }
 
     @Synchronized
     fun get(sha: String): ByteArray? {
-        val t = now()
-        q.removeIf { t - it.at >= ttlMs }
-        return q.firstOrNull { it.sha == sha }?.bytes
+        expire()
+        return (q.firstOrNull { it.sha == sha }?.body as? Body.Bytes)?.bytes
     }
 
-    fun chunk(sha: String, i: Long, chunkSize: Long): ByteArray? = get(sha)?.let { Blob.slice(it, i, chunkSize) }
+    fun chunk(sha: String, i: Long, chunkSize: Long): ByteArray? = chunkSized(sha, i, chunkSize)?.first
+
+    /** Chunk plus the whole blob's size, after a SHA-256 check for file entries. */
+    @Synchronized
+    fun chunkSized(sha: String, i: Long, chunkSize: Long): Pair<ByteArray, Long>? {
+        expire()
+        val e = q.firstOrNull { it.sha == sha } ?: return null
+        return when (val b = e.body) {
+            is Body.Bytes -> Blob.slice(b.bytes, i, chunkSize)?.let { it to b.size }
+            is Body.FileSrc -> {
+                if (!b.file.isFile) return null
+                val mtime = b.file.lastModified()
+                val fresh = b.file.length() == b.size && b.checkedMtime == mtime
+                if (!fresh) {
+                    val got = runCatching { sha256File(b.file) }.getOrNull() ?: return null
+                    if (got != sha) return null
+                    b.size = b.file.length()
+                    b.checkedMtime = b.file.lastModified()
+                }
+                val (off, len) = Blob.chunkRange(b.size, chunkSize, i) ?: return null
+                val buf = ByteArray(len.toInt())
+                java.io.RandomAccessFile(b.file, "r").use { it.seek(off); it.readFully(buf) }
+                buf to b.size
+            }
+        }
+    }
+
+    private fun expire() {
+        val t = now()
+        q.removeIf { t - it.at >= ttlMs }
+    }
 
     /** Size and vault path of a cached blob (for the served-blob summary line). */
     @Synchronized
-    fun label(sha: String): BlobLabel? = q.firstOrNull { it.sha == sha }?.let { BlobLabel(it.bytes.size.toLong(), it.path) }
+    fun label(sha: String): BlobLabel? {
+        val e = q.firstOrNull { it.sha == sha } ?: return null
+        val size = when (val b = e.body) {
+            is Body.Bytes -> b.size
+            is Body.FileSrc -> b.size
+        }
+        return BlobLabel(size, e.path)
+    }
 
     @get:Synchronized val size: Int get() = q.size
 }
@@ -171,14 +233,24 @@ class Assembler(dir: File, val sha: String, val size: Long, val chunkSize: Long)
 
     /** All chunks there: the verified bytes (partial files removed), or `null` on a mismatch (starts over). */
     fun finish(): ByteArray? {
+        val f = finishToFile() ?: return null
+        val bytes = f.readBytes()
+        f.delete()
+        return bytes
+    }
+
+    /**
+     * Verify the part file with a streaming SHA-256 and leave it in place for [VaultTree.writeAtomicFrom].
+     * `null` on a mismatch (starts over). Caller must move or delete the returned file.
+     */
+    fun finishToFile(): java.io.File? {
         check(missing().isEmpty()) { "finish() with chunks missing" }
-        val bytes = part.readBytes()
-        if (bytes.size.toLong() != size || sha256Hex(bytes) != sha) {
+        if (part.length() != size || runCatching { sha256File(part) }.getOrNull() != sha) {
             reset()
             return null
         }
-        discard()
-        return bytes
+        haveFile.delete()
+        return part
     }
 
     fun reset() {

@@ -159,6 +159,13 @@ class SyncCoreTest {
             }
             return inner.read(rel)
         }
+        override fun inspect(rel: String): Inspect {
+            if (rel == stalePath && !served) {
+                served = true
+                return Inspect.File(sha256Hex(staleBytes), 1L, staleBytes.size.toLong())
+            }
+            return inner.inspect(rel)
+        }
     }
 
     @Test
@@ -383,5 +390,24 @@ class SyncCoreTest {
         org.junit.Assert.assertArrayEquals(big, java.io.File(dir, "Daily/p.jpg").readBytes())
         org.junit.Assert.assertFalse("same state: stamp is enough", c.needsBytes(r))
         org.junit.Assert.assertEquals(Decision.Ignore, c.onIncoming(r).decision)
+    }
+
+    @Test
+    fun staleAncestorCatchUpDoesNotWriteAConflictCopy() {
+        val dir = tmp.newFolder("stale-core")
+        File(dir, "Notes").mkdirs()
+        val v1 = "v1\n".toByteArray()
+        val v2 = "v2\n".toByteArray()
+        val v3 = "v3\n".toByteArray()
+        File(dir, "Notes/story.md").writeBytes(v1)
+        val c = SyncCore(FileVaultTree(dir), "towerx", AgentState("towerx", dir.path))
+        val s1 = NoteEvent.put("Notes/story.md", v1, "box", 1, null, 10).stamp
+        c.onIncoming(NoteEvent.put("Notes/story.md", v1, "box", 1, null, 10))
+        val ev3 = NoteEvent.put("Notes/story.md", v3, "box", 3, sha256Hex(v2), 30)
+        val a = c.onIncoming(ev3, listOf(sha256Hex(v2), sha256Hex(v1)))
+        org.junit.Assert.assertTrue(a.changed)
+        org.junit.Assert.assertTrue(a.conflicts.isEmpty())
+        org.junit.Assert.assertEquals("v3\n", File(dir, "Notes/story.md").readText())
+        org.junit.Assert.assertTrue(dir.walkTopDown().none { it.name.contains("conflict") })
     }
 }

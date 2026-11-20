@@ -5,6 +5,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** What Settings shows about event sync. */
 data class EngineStatus(
@@ -39,7 +40,13 @@ data class EngineOptions(
     val transfer: TransferOptions = TransferOptions(),
     /** Partial blob downloads (app cache, outside the vault); `null` = a temp dir per device. */
     val partialDir: File? = null,
+    /** Wait this long for the hub liveliness token before the first catch-up (then try anyway). `0` = do not wait (tests). */
+    val hubWaitMs: Long = 30_000,
+    /** Debounce a hub-token reappearance before retriggering catch-up. */
+    val catchupDebounceMs: Long = 3_000,
 )
+
+private const val ITEM_RETRIES = 3
 
 /**
  * Runs one [SyncCore] against one [EventLink] on a single worker thread, like the Rust agent's
@@ -64,6 +71,8 @@ class SyncEngine(
 ) {
     init {
         core.log = log
+        core.inlineMax = options.transfer.inlineMax
+        core.chunkSize = options.transfer.chunkSize
     }
 
     private val pendingNotes = ArrayList<SyncedNote>()
@@ -82,6 +91,11 @@ class SyncEngine(
         ?: File(System.getProperty("java.io.tmpdir"), "vault-events-partial-${core.device.filter { it.isLetterOrDigit() }}")
     private var link: EventLink? = null
     private var linked = 0
+    private val hubPresent = AtomicBoolean(false)
+    private var sessionReady = false
+    private var catchupFailures = 0
+    private var retryTask: ScheduledFuture<*>? = null
+    private var debounceTask: ScheduledFuture<*>? = null
     @Volatile private var stopped = false
     @Volatile var status = EngineStatus(mode = config.mode)
         private set
@@ -107,7 +121,7 @@ class SyncEngine(
         }
     }
 
-    fun catchUpNow() = worker.execute { guarded("catch-up") { catchUp() } }
+    fun catchUpNow() = worker.execute { guarded("catch-up") { catchUpOrSchedule() } }
 
     fun stop() {
         if (stopped) return
@@ -153,10 +167,28 @@ class SyncEngine(
         } catch (e: Throwable) {
             log("serving blobs failed: $e")
         }
+        try {
+            l.subscribeHubPresence { present ->
+                val was = hubPresent.getAndSet(present)
+                if (present && !was) log("hub online")
+                else if (!present && was) log("hub offline")
+                if (present && sessionReady && !stopped) worker.execute { scheduleDebouncedCatchup() }
+            }
+        } catch (e: Throwable) {
+            log("hub presence subscribe failed: $e")
+        }
+        if (options.hubWaitMs > 0 && !hubPresent.get()) {
+            val t0 = System.currentTimeMillis()
+            while (!stopped && !hubPresent.get() && System.currentTimeMillis() - t0 < options.hubWaitMs) {
+                Thread.sleep(50)
+            }
+            if (!hubPresent.get()) log("no hub token after ${options.hubWaitMs / 1000} s; catching up anyway")
+        }
         linked = l.routerCount() + l.peerCount()
         update { it.copy(phase = EngineStatus.Phase.CONNECTED, routers = l.routerCount(), peers = l.peerCount(), lastError = null) }
         // Remote first, then local: incoming changes are applied before offline local edits go out.
-        guarded("catch-up") { catchUp() }
+        guarded("catch-up") { catchUpOrSchedule() }
+        sessionReady = true
         guarded("shared config") { onConnected(core) }
         guarded("initial scan") {
             val b = core.scan()
@@ -166,7 +198,7 @@ class SyncEngine(
             log("initial scan: published ${b.publish.size}")
             core.lastScanRefused?.let { r -> update { it.copy(lastError = r) } }
         }
-        tasks += worker.scheduleWithFixedDelay({ guarded("catch-up") { catchUp() } }, options.catchupIntervalMs, options.catchupIntervalMs, TimeUnit.MILLISECONDS)
+        tasks += worker.scheduleWithFixedDelay({ guarded("catch-up") { catchUpOrSchedule() } }, options.catchupIntervalMs, options.catchupIntervalMs, TimeUnit.MILLISECONDS)
         tasks += worker.scheduleWithFixedDelay({
             guarded("rescan") {
                 val b = core.scan()
@@ -188,7 +220,7 @@ class SyncEngine(
         val n = r + p
         if (n > 0 && linked == 0) {
             log("hub link up; catching up")
-            catchUp()
+            catchUpOrSchedule()
         }
         linked = n
         if (r != status.routers || p != status.peers) update { it.copy(routers = r, peers = p) }
@@ -260,9 +292,10 @@ class SyncEngine(
         return false
     }
 
-    private fun applyIncoming(ev: NoteEvent, startedAtMs: Long = System.currentTimeMillis()) {
+    private fun applyIncoming(ev: NoteEvent, startedAtMs: Long = System.currentTimeMillis(), contentFile: File? = null) {
         guarded("apply ${ev.path}") {
-            val a = core.onIncoming(ev)
+            val ancestors = historyAncestors(ev.path, ev.stamp.sha256)
+            val a = core.onIncoming(ev, ancestors, contentFile)
             if (a.changed) log(appliedLine(ev))
             if (a.changed || a.conflicts.isNotEmpty()) {
                 update {
@@ -283,8 +316,72 @@ class SyncEngine(
     }
 
     /** One catch-up pass against the hub (Rust `agent::catch_up`). Returns `false` if no hub answered. */
+    private fun catchupBackoff(failures: Int, normalMs: Long): Long {
+        val steps = longArrayOf(2_000, 5_000, 10_000, 30_000)
+        if (failures <= 0) return normalMs
+        return steps.getOrNull(failures - 1) ?: normalMs
+    }
+
+    private fun scheduleDebouncedCatchup() {
+        debounceTask?.cancel(false)
+        val delay = options.catchupDebounceMs
+        if (delay <= 0) {
+            guarded("catch-up") { catchUpOrSchedule() }
+            return
+        }
+        debounceTask = worker.schedule({ guarded("catch-up") { catchUpOrSchedule() } }, delay, TimeUnit.MILLISECONDS)
+    }
+
+    private fun catchUpOrSchedule() {
+        val t0 = System.currentTimeMillis()
+        val ok = try {
+            catchUp()
+        } catch (e: Throwable) {
+            log("catch-up failed: ${e.message ?: e.javaClass.simpleName}")
+            false
+        }
+        if (ok) {
+            catchupFailures = 0
+            retryTask?.cancel(false)
+            retryTask = null
+            return
+        }
+        catchupFailures++
+        val wait = catchupBackoff(catchupFailures, options.catchupIntervalMs)
+        val elapsed = System.currentTimeMillis() - t0
+        val noRoute = elapsed < 500
+        log(
+            "catch-up: no hub answered" + (if (noRoute) " (no route)" else "") +
+                "; retry in ${wait / 1000}s",
+        )
+        retryTask?.cancel(false)
+        retryTask = worker.schedule({ guarded("catch-up") { catchUpOrSchedule() } }, wait, TimeUnit.MILLISECONDS)
+    }
+
+    private fun fetchNoteRetry(l: EventLink, path: String): NoteEvent? {
+        repeat(ITEM_RETRIES) { i ->
+            val ev = runCatching { l.fetchNote(path, options.queryTimeoutMs) }.getOrNull()
+            if (ev != null) return ev
+            if (i < ITEM_RETRIES - 1) Thread.sleep(400)
+        }
+        return null
+    }
+
+    private fun historyAncestors(path: String, incomingSha: String): List<String> {
+        val l = link ?: return emptyList()
+        val h = runCatching { l.fetchHistory(path, 50, options.queryTimeoutMs) }.getOrNull() ?: return emptyList()
+        val out = LinkedHashSet<String>()
+        for (e in h.entries) {
+            if (e.sha256.isNotEmpty() && e.sha256 != incomingSha) out += e.sha256
+            val prev = e.prevSha256
+            if (!prev.isNullOrEmpty() && prev != incomingSha) out += prev
+        }
+        return out.toList()
+    }
+
     private fun catchUp(): Boolean {
         val l = link ?: return false
+        val tStart = System.currentTimeMillis()
         val index = l.fetchIndex(options.queryTimeoutMs)
         if (index == null) {
             update { it.copy(lastCatchUp = "no hub answered the catch-up query") }
@@ -295,6 +392,8 @@ class SyncEngine(
         var applied = 0
         var conflicts = 0
         var adopted = 0
+        var fetched = 0
+        var failed = 0
         val changed = ArrayList<String>()
         val notes = ArrayList<SyncedNote>()
         for (p in fetch) {
@@ -303,25 +402,49 @@ class SyncEngine(
             if (hubStamp != null && core.adoptIfSame(hubStamp)) {
                 adopted++
                 if (!hubStamp.deleted && hubStamp.sha256.isNotEmpty()) {
-                    val bytes = (core.fs.read(p) as? Disk.Present)?.bytes?.size?.toLong() ?: 0L
+                    val bytes = (core.fs.inspect(p) as? Inspect.File)?.size ?: 0L
                     publishAck(l, hubStamp.sha256, TransferAck.ok(p, bytes, System.currentTimeMillis() - t0))
                 }
                 continue
             }
-            var ev = l.fetchNote(p, options.queryTimeoutMs)
-            if (ev == null) { log("catch-up: hub listed $p but returned nothing"); continue }
-            if (ev.isBlobRef && core.needsBytes(ev)) {
-                ev = try {
+            var ev = fetchNoteRetry(l, p)
+            if (ev == null) { log("catch-up: hub listed $p but returned nothing"); failed++; continue }
+            val ancestors = historyAncestors(p, ev.stamp.sha256)
+            var contentFile: File? = null
+            if (ev.isBlobRef && core.needsBytes(ev, ancestors)) {
+                val got = try {
                     val (full, f) = fetcher(l).fill(ev)
                     log("catch-up: ${fetchedLine(ev, f)}")
+                    fetched++
                     full
                 } catch (e: Throwable) {
-                    log("catch-up: blob for $p not fetched: ${e.message}; next pass retries")
-                    publishFailAck(l, ev, t0, e.message ?: e.javaClass.simpleName)
-                    continue
+                    var last: Throwable = e
+                    var full: NoteEvent? = null
+                    for (i in 2..ITEM_RETRIES) {
+                        try {
+                            val (f2, fetchedInfo) = fetcher(l).fill(ev)
+                            log("catch-up: ${fetchedLine(ev, fetchedInfo)}")
+                            fetched++
+                            full = f2
+                            last = e
+                            break
+                        } catch (e2: Throwable) {
+                            last = e2
+                            Thread.sleep(400)
+                        }
+                    }
+                    if (full == null) {
+                        log("catch-up: blob for $p not fetched: ${last.message}; next pass retries")
+                        publishFailAck(l, ev, t0, last.message ?: last.javaClass.simpleName)
+                        failed++
+                        continue
+                    } else full
                 }
+                ev = got
+            } else if (!ev.isBlobRef) {
+                fetched++
             }
-            val a = core.onIncoming(ev)
+            val a = core.onIncoming(ev, ancestors, contentFile)
             if (a.changed) log("catch-up: ${appliedLine(ev)}")
             if (a.changed) { applied++; changed += p }
             notes += SyncNotices.fromIncoming(ev, a, core.device)
@@ -333,8 +456,10 @@ class SyncEngine(
         val out = republish.mapNotNull { core.republish(it) }
         publishAll(out)
         core.saveIfDirty()
+        val elapsed = (System.currentTimeMillis() - tStart) / 1000.0
+        val summary = "catch-up: ${index.stamps.size} listed, $fetched fetched, $failed failed in ${"%.1f".format(java.util.Locale.ROOT, elapsed)}s"
         val msg = "hub ${index.hub}: ${index.stamps.size} stored, fetched ${fetch.size - adopted}, adopted $adopted, applied $applied, conflicts $conflicts, republished ${out.size}"
-        log("catch-up from $msg")
+        log("$summary ($msg)")
         update { it.copy(lastCatchUp = msg, applied = it.applied + applied, conflicts = it.conflicts + conflicts) }
         if (changed.isNotEmpty()) onVaultChanged(changed)
         postNotices(SyncNotices.plan(notes, catchUp = true))
@@ -365,10 +490,15 @@ class SyncEngine(
             try {
                 val t = options.transfer
                 val ref = ev.toBlobRef(t.inlineMax, t.chunkSize)
-                if (ref != null) outgoing.insert(ev.stamp.sha256, ev.content!!, ev.path)
+                val toSend = ref ?: ev
+                if (toSend.isBlobRef) {
+                    val f = core.fs.localFile(ev.path)
+                    if (f != null && f.isFile) outgoing.insertFile(ev.stamp.sha256, f, ev.path)
+                    else ev.content?.let { outgoing.insert(ev.stamp.sha256, it, ev.path) }
+                }
                 val t0 = System.currentTimeMillis()
-                l.publish(ref ?: ev)
-                val b = ref?.blob
+                l.publish(toSend)
+                val b = toSend.blob
                 log(publishedLine(ev) + if (b != null) " as blob (${b.size} B, ${b.chunks} chunks of ${b.chunkSize} B, sha256 ${ev.stamp.sha256.take(12)})" else "")
                 if (!ev.stamp.deleted && ev.stamp.sha256.isNotEmpty()) {
                     publishAck(l, ev.stamp.sha256, TransferAck.ok(ev.path, ev.size, System.currentTimeMillis() - t0))

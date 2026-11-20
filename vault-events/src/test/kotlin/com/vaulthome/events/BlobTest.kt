@@ -184,4 +184,29 @@ class BlobTest {
             assertEquals(DecodeErrorKind.HashMismatch, x.kind)
         }
     }
+
+    @Test
+    fun outgoingCacheServesFromDiskAfterHashCheck() {
+        val dir = org.junit.rules.TemporaryFolder().apply { create() }
+        try {
+            val f = dir.newFile("photo.bin")
+            val bytes = data(20_000)
+            f.writeBytes(bytes)
+            val sha = sha256Hex(bytes)
+            val c = OutgoingCache(maxBytes = 1024, ttlMs = 60_000)
+            c.insertFile(sha, f, "Daily/photo.bin")
+            org.junit.Assert.assertNull("file entries are not held in RAM", c.get(sha))
+            org.junit.Assert.assertArrayEquals(bytes.copyOfRange(4096, 8192), c.chunk(sha, 1, 4096))
+            org.junit.Assert.assertEquals("Daily/photo.bin", c.label(sha)?.path)
+            val other = ByteArray(bytes.size) { (bytes[it].toInt().inv()).toByte() }
+            f.writeBytes(other)
+            f.setLastModified(f.lastModified() + 2_000)
+            org.junit.Assert.assertNull("sha no longer matches", c.chunk(sha, 0, 4096))
+            f.writeBytes(bytes)
+            f.setLastModified(f.lastModified() + 4_000)
+            org.junit.Assert.assertArrayEquals(bytes.copyOfRange(0, 4096), c.chunk(sha, 0, 4096))
+        } finally {
+            dir.delete()
+        }
+    }
 }

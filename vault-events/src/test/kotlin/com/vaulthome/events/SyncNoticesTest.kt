@@ -102,7 +102,7 @@ class SyncNoticesTest {
         val box = tmp.newFolder("box"); val s24 = tmp.newFolder("s24")
         for (i in 1..6) box.put("Notes/n$i.md", "note $i")
         val notices = CopyOnWriteArrayList<List<Notice>>()
-        val opts = EngineOptions(rescanIntervalMs = 100, catchupIntervalMs = 60_000, linkCheckMs = 1_000, notifyDebounceMs = 200)
+        val opts = EngineOptions(rescanIntervalMs = 100, catchupIntervalMs = 60_000, linkCheckMs = 1_000, notifyDebounceMs = 200, hubWaitMs = 0)
         val eBox = SyncEngine(SyncCore(FileVaultTree(box), "box", AgentState("box", box.path)), LinkConfig(LinkMode.CLIENT, listOf("tcp/127.0.0.1:1")), { bus.link() }, opts)
         eBox.start()
         waitFor { bus.stored.size == 6 }

@@ -6,7 +6,7 @@ object VaultRules {
     const val TMP_PREFIX = ".vault-events-tmp-"
 
     /** Default per-file cap. Larger files stay on the Drive fallback path. */
-    const val DEFAULT_MAX_BYTES: Long = 8L * 1024 * 1024
+    const val DEFAULT_MAX_BYTES: Long = 64L * 1024 * 1024
 
     private val TEMP_SUFFIXES = listOf(".tmp", ".swp", ".swx", ".part", ".crdownload", ".partial")
 

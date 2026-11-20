@@ -45,6 +45,16 @@ interface EventLink : AutoCloseable {
     /** Stored event for one path, best of all replies; `null` = none. */
     fun fetchNote(path: String, timeoutMs: Long): NoteEvent?
 
+    /** Hub history for [path] (newest first), up to [limit] entries; `null` = no hub answered. */
+    fun fetchHistory(path: String, limit: Int, timeoutMs: Long): HistoryReply? = null
+
+    /**
+     * Subscribe to the hub liveliness token on [Presence.HUB_KEY] (history on, so a token already
+     * present is delivered). [onChange] is `true` when the hub appears, `false` when it leaves.
+     * Default: no-op.
+     */
+    fun subscribeHubPresence(onChange: (Boolean) -> Unit): AutoCloseable? = null
+
     /** Routers this session is linked to right now. */
     fun routerCount(): Int
 

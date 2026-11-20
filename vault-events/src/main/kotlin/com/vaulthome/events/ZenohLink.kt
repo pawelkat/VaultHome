@@ -7,6 +7,7 @@ import io.zenoh.bytes.ZBytes
 import io.zenoh.handlers.Callback
 import io.zenoh.keyexpr.KeyExpr
 import io.zenoh.liveliness.LivelinessToken
+import io.zenoh.sample.SampleKind
 import io.zenoh.pubsub.Subscriber
 import io.zenoh.qos.CongestionControl
 import io.zenoh.qos.Priority
@@ -33,6 +34,7 @@ class ZenohLink private constructor(private val session: Session, private val de
     private var subscriber: Subscriber<Unit>? = null
     private var blobQueryable: Queryable<Unit>? = null
     private var presenceToken: LivelinessToken? = null
+    private var hubPresenceSub: AutoCloseable? = null
     private var presenceQueryable: Queryable<Unit>? = null
     private var sweeper: ScheduledExecutorService? = null
 
@@ -83,6 +85,27 @@ class ZenohLink private constructor(private val session: Session, private val de
             synchronized(this) { if (best?.let { ev.stamp.beats(it.stamp) } != false) best = ev }
         }
         return best
+    }
+
+    override fun fetchHistory(path: String, limit: Int, timeoutMs: Long): HistoryReply? {
+        var out: HistoryReply? = null
+        val q = "${VaultKey.pathToHistoryKey(path)}?limit=$limit"
+        query(q, timeoutMs) { s ->
+            if (out == null) out = runCatching { HistoryReply.decode(s.payload.toBytes()) }.getOrNull()
+        }
+        return out
+    }
+
+    override fun subscribeHubPresence(onChange: (Boolean) -> Unit): AutoCloseable? {
+        runCatching { hubPresenceSub?.close() }
+        val ke = KeyExpr.tryFrom(Presence.HUB_KEY).getOrThrow()
+        val sub = session.liveliness().declareSubscriber(
+            ke,
+            Callback<Sample> { s -> onChange(s.kind == SampleKind.PUT) },
+            history = true,
+        ).getOrThrow()
+        hubPresenceSub = sub
+        return AutoCloseable { runCatching { sub.close() } }
     }
 
     override fun serveBlobs(
@@ -158,6 +181,8 @@ class ZenohLink private constructor(private val session: Session, private val de
     override fun close() {
         runCatching { sweeper?.shutdownNow() }
         sweeper = null
+        runCatching { hubPresenceSub?.close() }
+        hubPresenceSub = null
         runCatching { presenceToken?.close() }
         presenceToken = null
         runCatching { presenceQueryable?.close() }

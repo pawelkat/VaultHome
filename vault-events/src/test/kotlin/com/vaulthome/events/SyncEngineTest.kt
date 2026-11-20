@@ -18,6 +18,7 @@ class SyncEngineTest {
 
     class Bus {
         val stored = HashMap<String, NoteEvent>()
+        val history = HashMap<String, ArrayList<NoteEvent>>()
         val subs = CopyOnWriteArrayList<(String, ByteArray) -> Unit>()
         val blobServers = CopyOnWriteArrayList<Pair<String, (String, Long, Long) -> ByteArray?>>()
         var puts = 0
@@ -34,11 +35,16 @@ class SyncEngineTest {
                     maxPut = maxOf(maxPut, ev.encode().size)
                     val cur = stored[ev.path]
                     if (cur == null || ev.stamp.beats(cur.stamp)) stored[ev.path] = ev
+                    history.getOrPut(ev.path) { ArrayList() }.add(ev)
                 }
                 subs.forEach { it(ev.key(), ev.encode()) }
             }
             override fun fetchIndex(timeoutMs: Long) = synchronized(this@Bus) { IndexReply(1, "fake", stored.values.map { it.stamp }) }
             override fun fetchNote(path: String, timeoutMs: Long) = synchronized(this@Bus) { stored[path] }
+            override fun fetchHistory(path: String, limit: Int, timeoutMs: Long) = synchronized(this@Bus) {
+                val ents = (history[path] ?: emptyList()).asReversed().take(limit).map { HistoryEntry(it.stamp.sha256, it.stamp.prevSha256) }
+                HistoryReply(1, "fake", path, ents)
+            }
             override fun routerCount() = 1
             override fun peerCount() = 0
             override fun serveBlobs(
@@ -64,7 +70,7 @@ class SyncEngineTest {
         openLink = { bus.configs += it; bus.link(it.device) },
         options = EngineOptions(
             rescanIntervalMs = 100, catchupIntervalMs = 60_000, linkCheckMs = 1_000,
-            partialDir = File(tmp.root, "partial-$dev"),
+            partialDir = File(tmp.root, "partial-$dev"), hubWaitMs = 0,
         ),
     )
 
@@ -142,5 +148,62 @@ class SyncEngineTest {
         val ec = engine(bus, c, "nitro5").also { it.start() }
         waitFor(10_000) { File(c, "Daily/photo.jpg").let { it.isFile && sha256Hex(it.readBytes()) == sha256Hex(photo) } }
         listOf(ea, eb, ec).forEach { it.stop() }
+    }
+
+    @Test
+    fun catchUpDoesNotConflictOnStaleAncestor() {
+        val bus = Bus()
+        val a = tmp.newFolder("sa"); val b = tmp.newFolder("sb")
+        File(a, "Notes").mkdirs(); File(b, "Notes").mkdirs()
+        val stateB = File(tmp.root, "sb-state.json")
+        val ea = engine(bus, a, "box").also { it.start() }
+        val eb = SyncEngine(
+            SyncCore(FileVaultTree(b), "towerx", AgentState("towerx", b.path), stateB),
+            LinkConfig(LinkMode.CLIENT, listOf("tcp/127.0.0.1:1")),
+            openLink = { bus.link(it.device) },
+            options = EngineOptions(
+                rescanIntervalMs = 100, catchupIntervalMs = 60_000, linkCheckMs = 1_000,
+                partialDir = File(tmp.root, "partial-towerx"), hubWaitMs = 0,
+            ),
+        ).also { it.start() }
+        File(a, "Notes/story.md").writeText("v1\n")
+        waitFor { File(b, "Notes/story.md").let { it.isFile && it.readText() == "v1\n" } }
+        eb.stop(); eb.awaitStopped(2_000)
+        File(a, "Notes/story.md").writeText("v2\n")
+        waitFor { bus.stored["Notes/story.md"]?.stamp?.version == 2L }
+        File(a, "Notes/story.md").writeText("v3\n")
+        waitFor { bus.stored["Notes/story.md"]?.stamp?.version == 3L }
+        val eb2 = SyncEngine(
+            SyncCore(FileVaultTree(b), "towerx", AgentState.loadOrNew(stateB, "towerx", b.path), stateB),
+            LinkConfig(LinkMode.CLIENT, listOf("tcp/127.0.0.1:1")),
+            openLink = { bus.link(it.device) },
+            options = EngineOptions(
+                rescanIntervalMs = 100, catchupIntervalMs = 60_000, linkCheckMs = 1_000,
+                partialDir = File(tmp.root, "partial-towerx2"), hubWaitMs = 0,
+            ),
+        ).also { it.start() }
+        waitFor { File(b, "Notes/story.md").readText() == "v3\n" }
+        assertTrue(
+            "stale v1 must not become a conflict copy: ${b.walkTopDown().filter { it.name.contains("conflict") }.toList()}",
+            b.walkTopDown().none { it.name.contains("conflict") },
+        )
+        ea.stop(); eb2.stop()
+    }
+
+    @Test
+    fun fileOverEightMibRoundTrips() {
+        val bus = Bus()
+        val a = tmp.newFolder("biga"); val b = tmp.newFolder("bigb")
+        File(a, "Daily").mkdirs(); File(b, "Daily").mkdirs()
+        val ea = engine(bus, a, "box").also { it.start() }
+        val eb = engine(bus, b, "towerx").also { it.start() }
+        Thread.sleep(200)
+        val bytes = ByteArray(20_000_000) { (it * 13 % 251).toByte() }
+        File(a, "Daily/big.bin").writeBytes(bytes)
+        waitFor(40_000) {
+            File(b, "Daily/big.bin").let { it.isFile && it.length() == bytes.size.toLong() && sha256File(it) == sha256Hex(bytes) }
+        }
+        assertTrue(b.walkTopDown().none { it.name.contains("conflict") })
+        ea.stop(); eb.stop()
     }
 }

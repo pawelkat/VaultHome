@@ -32,6 +32,8 @@ class SyncCore(
     private val stateFile: File? = null,
     var maxDelete: Int = DEFAULT_MAX_DELETE,
     var minFiles: Int = DEFAULT_MIN_FILES,
+    var inlineMax: Long = Blob.DEFAULT_INLINE_MAX,
+    var chunkSize: Long = Blob.DEFAULT_CHUNK_SIZE,
     private val now: () -> Long = System::currentTimeMillis,
     /** Program part of the writer label of writes this app makes (`<device>/vaulthome`). */
     val program: String = DEFAULT_PROGRAM,
@@ -91,39 +93,43 @@ class SyncCore(
      * Whether applying blob reference [ev] needs its bytes (it would be written or saved as a conflict copy).
      * `false`: the stamp alone is enough (ignored, or the disk already holds these bytes).
      */
-    fun needsBytes(ev: NoteEvent): Boolean {
+    fun needsBytes(ev: NoteEvent, ancestors: List<String> = emptyList()): Boolean {
         val path = ev.stamp.path
         if (VaultRules.isIgnored(path)) return false
-        val disk = fs.read(path)
-        if (disk is Disk.Skipped) return false
-        val localTs = (disk as? Disk.Present)?.mtimeMs ?: now()
-        return needsBytes(Conflict.decide(state.stamp(path), disk.sha, ev.stamp, device, localTs))
+        val disk = fs.inspect(path)
+        if (disk is Inspect.Skipped) return false
+        val localTs = (disk as? Inspect.File)?.mtimeMs ?: now()
+        return needsBytes(Conflict.decide(state.stamp(path), disk.sha, ev.stamp, device, localTs, ancestors))
     }
 
     private fun needsBytes(d: Decision): Boolean =
         d is Decision.Apply || (d is Decision.KeepLocal && d.saveIncomingAs != null)
 
-    /** Apply one event that arrived from the network. */
-    fun onIncoming(ev: NoteEvent): Applied {
+    /**
+     * Apply one event that arrived from the network.
+     * [ancestors] are hub-history SHAs of the incoming event (not including itself).
+     * [contentFile] is a verified blob payload on disk (preferred for large files).
+     */
+    fun onIncoming(ev: NoteEvent, ancestors: List<String> = emptyList(), contentFile: File? = null): Applied {
         val path = ev.stamp.path
         if (VaultRules.isIgnored(path)) return Applied()
-        val disk = fs.read(path)
-        if (disk is Disk.Skipped) return Applied()
-        val localTs = (disk as? Disk.Present)?.mtimeMs ?: now()
-        var d = Conflict.decide(state.stamp(path), disk.sha, ev.stamp, device, localTs)
+        val ins = fs.inspect(path)
+        if (ins is Inspect.Skipped) return Applied()
+        val localTs = (ins as? Inspect.File)?.mtimeMs ?: now()
+        var d = Conflict.decide(state.stamp(path), ins.sha, ev.stamp, device, localTs, ancestors)
         val inc = ev.stamp
         val incSha = if (inc.deleted) null else inc.sha256
         if (d is Decision.KeepLocal || (d is Decision.Apply && d.saveLocalAs != null)) {
             // Re-check right before making a copy: SAF reads are not atomic (a provider, Obsidian or Autosync may
             // have been mid-write when we hashed). If the live file now holds exactly the incoming bytes there is
             // no conflict; record the stamp (rule 1 of decide, applied to the fresh read).
-            val fresh = fs.read(path)
-            if (fresh !is Disk.Skipped && fresh.sha == incSha) {
+            val fresh = fs.inspect(path)
+            if (fresh !is Inspect.Skipped && fresh.sha == incSha) {
                 log("conflict on $path avoided: disk now holds the incoming bytes (${ev.size} B ${short(inc.sha256)}); adopted")
                 d = Decision.Adopt
             }
         }
-        if (ev.isBlobRef && needsBytes(d)) {
+        if (ev.isBlobRef && ev.content == null && contentFile == null && needsBytes(d)) {
             // Never apply (or save as a conflict copy) a file whose bytes were not fetched and verified.
             throw IllegalStateException("$path: blob ${short(inc.sha256)} not fetched yet")
         }
@@ -134,16 +140,24 @@ class SyncCore(
             is Decision.Ignore -> {}
             is Decision.Adopt -> record(ev.stamp)
             is Decision.Apply -> {
-                if (d.saveLocalAs != null && disk is Disk.Present) {
-                    val info = ConflictInfo(path, inc.sha256, ev.size, inc.origin, disk.sha256, disk.bytes.size.toLong(), device)
-                    writeConflict(d.saveLocalAs, disk.bytes, info, conflicts, publish)
+                if (d.saveLocalAs != null && ins is Inspect.File) {
+                    val disk = fs.read(path)
+                    if (disk is Disk.Present) {
+                        val info = ConflictInfo(path, inc.sha256, ev.size, inc.origin, disk.sha256, disk.bytes.size.toLong(), device)
+                        writeConflict(d.saveLocalAs, disk.bytes, info, conflicts, publish)
+                    }
                 }
-                val c = ev.content
-                if (c != null && !ev.stamp.deleted) fs.writeAtomic(path, c) else fs.remove(path)
+                when {
+                    ev.stamp.deleted -> fs.remove(path)
+                    ev.content != null -> fs.writeAtomic(path, ev.content)
+                    contentFile != null -> fs.writeAtomicFrom(path, contentFile)
+                    else -> fs.remove(path)
+                }
                 changed = true
                 record(ev.stamp)
             }
             is Decision.KeepLocal -> {
+                val disk = fs.read(path)
                 val (writer, why) = classify(path, disk.sha, state.stamp(path) != null)
                 val local = d.local.by(writer, why)
                 val content = (disk as? Disk.Present)?.bytes
@@ -151,12 +165,34 @@ class SyncCore(
                 if (d.saveIncomingAs != null && c != null) {
                     val info = ConflictInfo(path, local.sha256, content?.size?.toLong() ?: 0L, device, inc.sha256, c.size.toLong(), inc.origin)
                     writeConflict(d.saveIncomingAs, c, info, conflicts, publish)
+                } else if (d.saveIncomingAs != null && contentFile != null) {
+                    val info = ConflictInfo(path, local.sha256, content?.size?.toLong() ?: 0L, device, inc.sha256, contentFile.length(), inc.origin)
+                    writeConflictFile(d.saveIncomingAs, contentFile, inc.sha256, info, conflicts, publish)
                 }
                 record(local)
-                publish += NoteEvent(FORMAT_VERSION, local, content)
+                publish += if (content != null) NoteEvent(FORMAT_VERSION, local, content) else NoteEvent(FORMAT_VERSION, local, null, blob = ev.blob)
             }
         }
         return Applied(d, changed, conflicts, publish)
+    }
+
+    private fun writeConflictFile(name: String, src: File, sha: String, info: ConflictInfo, conflicts: MutableList<String>, publish: MutableList<NoteEvent>) {
+        if (info.loserSha256 == info.winnerSha256) {
+            log("conflict on ${info.of}: both sides identical, no copy")
+            return
+        }
+        val slot = fs.conflictSlotSha(name, sha) ?: run {
+            log("conflict on ${info.of}: copy $name already holds these bytes")
+            return
+        }
+        fs.writeAtomicFrom(slot, src)
+        log(
+            "conflict on ${info.of}: kept ${info.winnerSize} B ${short(info.winnerSha256)} from ${info.winnerOrigin}, " +
+                "saved ${info.loserSize} B ${short(info.loserSha256)} from ${info.loserOrigin} as $slot by $ownWriter",
+        )
+        if (info.keptSmaller) log("WARN conflict on ${info.of}: the live path keeps the SMALLER side (${info.winnerSize} B < ${info.loserSize} B); check $slot")
+        conflicts += slot
+        localChange(slot, trustStat = false, label = ownWriter to Cause.CONFLICT_COPY)?.let { publish += it.withConflict(info) }
     }
 
     /** Save the losing bytes under a conflict name and publish the copy; never for identical bytes. */
@@ -208,7 +244,12 @@ class SyncCore(
                 val (writer, why) = label ?: classify(rel, disk.sha256, prev != null)
                 // ts = file mtime (the edit time); only a tie-break after the version counter.
                 val ts = if (disk.mtimeMs > 0) disk.mtimeMs else now()
-                NoteEvent.put(rel, disk.bytes, device, version, prevSha, ts).by(writer, why).also { record(it.stamp) }
+                val ev = if (disk.size > inlineMax) {
+                    NoteEvent.blobPut(rel, disk.sha256, disk.size, chunkSize, device, version, prevSha, ts)
+                } else {
+                    NoteEvent.put(rel, disk.bytes, device, version, prevSha, ts)
+                }
+                ev.by(writer, why).also { record(it.stamp) }
             }
             is Disk.Absent -> if (prev != null && !prev.deleted) {
                 val (writer, why) = label ?: classify(rel, null, true)

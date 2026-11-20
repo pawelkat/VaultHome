@@ -16,6 +16,11 @@ object VaultKey {
     const val NOTES_PREFIX = "vault/notes"
     const val NOTES_WILDCARD = "vault/notes/**"
     const val INDEX_KEY = "vault/hub/index"
+    const val HISTORY_PREFIX = "vault/hub/history"
+    const val HISTORY_WILDCARD = "vault/hub/history/**"
+
+    /** `Notes/a.md` -> `vault/hub/history/Notes/a.md` (same escaping as [pathToKey]). */
+    fun pathToHistoryKey(path: String): String = HISTORY_PREFIX + pathToKey(path).removePrefix(NOTES_PREFIX)
 
     /** `null` when [path] is a valid vault-relative `/`-separated path. */
     fun check(path: String): PathError? {

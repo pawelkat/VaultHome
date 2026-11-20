@@ -236,6 +236,15 @@ class NoteEvent(
         fun put(path: String, content: ByteArray, origin: String, version: Long, prevSha256: String?, tsMs: Long) =
             NoteEvent(FORMAT_VERSION, Stamp(path, version, tsMs, origin, false, sha256Hex(content), prevSha256), content)
 
+        /** Blob-reference event (no inline content) for a file already hashed on disk. */
+        fun blobPut(path: String, sha256: String, size: Long, chunkSize: Long, origin: String, version: Long, prevSha256: String?, tsMs: Long) =
+            NoteEvent(
+                FORMAT_VERSION,
+                Stamp(path, version, tsMs, origin, false, sha256, prevSha256),
+                content = null,
+                blob = BlobInfo.of(size, chunkSize),
+            )
+
         fun delete(path: String, origin: String, version: Long, prevSha256: String?, tsMs: Long) =
             NoteEvent(FORMAT_VERSION, Stamp(path, version, tsMs, origin, true, "", prevSha256), null)
 
@@ -330,8 +339,23 @@ data class IndexReply(val format: Int, val hub: String, val stamps: List<Stamp>)
 fun isSha256Hex(s: String): Boolean = s.length == 64 && s.all { it in '0'..'9' || it in 'a'..'f' }
 
 /** Lower-case hex SHA-256. */
-fun sha256Hex(bytes: ByteArray): String {
-    val d = MessageDigest.getInstance("SHA-256").digest(bytes)
+fun sha256Hex(bytes: ByteArray): String = sha256HexDigest(MessageDigest.getInstance("SHA-256").digest(bytes))
+
+/** Stream a SHA-256 without holding the whole file in RAM. */
+fun sha256Hex(input: java.io.InputStream): String {
+    val md = MessageDigest.getInstance("SHA-256")
+    val buf = ByteArray(64 * 1024)
+    while (true) {
+        val n = input.read(buf)
+        if (n < 0) break
+        if (n > 0) md.update(buf, 0, n)
+    }
+    return sha256HexDigest(md.digest())
+}
+
+fun sha256File(f: java.io.File): String = f.inputStream().use { sha256Hex(it) }
+
+private fun sha256HexDigest(d: ByteArray): String {
     val out = CharArray(64)
     for (i in d.indices) {
         val v = d[i].toInt() and 0xFF
