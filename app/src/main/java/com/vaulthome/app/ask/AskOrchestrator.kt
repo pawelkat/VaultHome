@@ -26,6 +26,8 @@ sealed interface AskOutcome {
         val model: String?,
         override val citations: List<Citation>,
         override val searchError: String?,
+        /** Which chat proxy answered: `TowerX` or `Nitro`. */
+        val host: String = "Nitro",
     ) : AskOutcome
 
     /** PR-B: answer from the on-device generator. */
@@ -58,12 +60,40 @@ class AskOrchestrator(
     private val search: suspend (String) -> List<SearchHit>,
     private val local: AnswerEngine = LocalAnswerEngineStub,
     private val maxCitations: Int = com.vaulthome.app.index.SearchConfig.ASK_TOP_K,
+    /** TowerX agent token `vault/presence/towerx`: true/false over Zenoh, `null` = no Zenoh session. */
+    private val towerxAgentAlive: () -> Boolean? = { null },
+    /** Reports each TowerX /health result (for the Settings indicator). */
+    private val onTowerXHealth: (Boolean, String) -> Unit = { _, _ -> },
 ) {
     suspend fun ask(question: String, onPhase: (AskPhase) -> Unit = {}): AskOutcome = coroutineScope {
         val q = question.trim()
         require(q.isNotEmpty()) { "Empty question" }
         val config = settings()
         val hitsJob = async { runSearch(q) }
+
+        // TowerX first when its agent is not known offline and its proxy (llama-server + vault-searchd) is healthy.
+        var towerxNote = ""
+        if (config.towerxEnabled && towerxAgentAlive() != false) {
+            onPhase(AskPhase.CheckingNitro)
+            val h = nitro.health(config.towerxBaseUrl)
+            onTowerXHealth(h == Health.Ok, describe(h))
+            if (h == Health.Ok) {
+                onPhase(AskPhase.AskingNitro)
+                try {
+                    val reply = nitro.chat(config.towerxBaseUrl, NitroPrompt.messages(q))
+                    hitsJob.cancel()
+                    return@coroutineScope AskOutcome.Nitro(reply.content, reply.model, emptyList(), null, host = "TowerX")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    towerxNote = "TowerX: ${e.message ?: "chat failed"}; "
+                }
+            } else {
+                towerxNote = "TowerX: ${describe(h)}; "
+            }
+        } else if (config.towerxEnabled) {
+            towerxNote = "TowerX offline in Zenoh; "
+        }
 
         var skip: NitroSkip
         var detail: String
@@ -99,6 +129,7 @@ class AskOrchestrator(
             }
         }
 
+        detail = towerxNote + detail
         onPhase(AskPhase.Searching)
         val hits = hitsJob.await()
         if (hits.error == null && local.isReady()) {
@@ -113,6 +144,12 @@ class AskOrchestrator(
             }
         }
         AskOutcome.SearchOnly(skip, detail, local.unavailableReason, hits.citations, hits.error)
+    }
+
+    private fun describe(h: Health): String = when (h) {
+        Health.Ok -> "up"
+        is Health.Loading -> "not ready (${h.detail.take(160)})"
+        is Health.Down -> h.reason.replace("Nitro", "proxy")
     }
 
     private class Hits(val citations: List<Citation>, val error: String?)

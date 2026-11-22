@@ -150,8 +150,12 @@ class EventSyncService : Service() {
                 }
             },
             onNotices = { n -> if (settings.notifySynced) notifier.post(n) },
+            // TowerX power board + TowerX agent tokens for Settings and Ask (vault note `Grok Bot - TowerX power`).
+            watchTokens = com.vaulthome.app.towerx.TowerXKeys.WATCH,
+            onToken = com.vaulthome.app.towerx.TowerXMonitor::onToken,
         )
         engine = e
+        com.vaulthome.app.towerx.TowerXMonitor.caller = { sel, payload, ms -> e.call(sel, payload, ms) }
         running = settings
         if (settings.mode == LinkMode.ROUTER) acquireWakeLock() else releaseWakeLock()
         mutable.value = EventSyncState(running = true, status = e.status, endpoint = endpoint(link.connect))
@@ -216,6 +220,8 @@ class EventSyncService : Service() {
     }
 
     private fun stopEngine() {
+        com.vaulthome.app.towerx.TowerXMonitor.caller = null
+        com.vaulthome.app.towerx.TowerXMonitor.onSessionClosed()
         engine?.stop()
         engine = null
         running = null

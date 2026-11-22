@@ -310,7 +310,8 @@ private val LocalInk = Color(0xFF5CC489)
 private fun CompactAskSwitch(askMode: Boolean, target: AskTarget, onMode: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (askMode) {
-            val (label, ink) = AskBadge.label(target) to if (target == AskTarget.Remote) RemoteInk else LocalInk
+            val tx by com.vaulthome.app.towerx.TowerXMonitor.state.collectAsStateWithLifecycle()
+            val (label, ink) = AskBadge.label(target, if (tx.askAvailable) "TowerX" else "Nitro") to if (target == AskTarget.Remote) RemoteInk else LocalInk
             Text(
                 label, color = ink, style = MaterialTheme.typography.labelSmall, maxLines = 1,
                 modifier = Modifier.background(Color(0xFF1A1A1A), RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 2.dp),

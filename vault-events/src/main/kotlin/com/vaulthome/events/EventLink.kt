@@ -55,6 +55,15 @@ interface EventLink : AutoCloseable {
      */
     fun subscribeHubPresence(onChange: (Boolean) -> Unit): AutoCloseable? = null
 
+    /**
+     * Liveliness subscriber on [keyExpr] (history on): [onChange] gets `(key, alive)`. Used for device tokens
+     * such as `devices/towerx-power` (ESP32) and `vault/presence/towerx` (TowerX agent). `null` = unsupported.
+     */
+    fun subscribeLiveliness(keyExpr: String, onChange: (String, Boolean) -> Unit): AutoCloseable? = null
+
+    /** One query on [selector] with an optional UTF-8 [payload]; first reply as text, `null` = no reply. */
+    fun call(selector: String, payload: String?, timeoutMs: Long): String? = null
+
     /** Routers this session is linked to right now. */
     fun routerCount(): Int
 
