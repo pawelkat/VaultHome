@@ -26,16 +26,22 @@ data class X4Status(val raw: String) {
     val refreshing: Boolean? get() = fields["refreshing"]?.toBooleanStrictOrNull()
     val stored: String? get() = fields["stored"]
     val shown: String? get() = fields["shown"]
+    val pages: Int? get() = fields["pages"]?.toIntOrNull()
 }
 
-/** Result of `show_text`: the device's own sentence plus the page count parsed from it. */
+/** Result of showing a note: the device's own sentence plus the page count parsed from it. */
 data class X4ShowResult(val message: String, val pages: Int?, val cut: Boolean, val status: X4Status?)
+
+/** A device seen advertising (BLE scan). */
+data class X4Found(val name: String, val address: String) {
+    val label: String get() = if (name.isNotBlank() && address.isNotBlank()) "$name · $address" else name.ifBlank { address }
+}
 
 /** What the app needs from the X4; an interface so the ViewModel can be faked. */
 interface X4Gateway {
-    /** Short probe: initialize + panel_status on one connection. Throws [X4Exception] when unreachable. */
-    suspend fun probe(baseUrl: String): X4Status
-    suspend fun showText(baseUrl: String, markdown: String): X4ShowResult
+    /** Short probe (BLE scan). Throws [X4Exception] when the reader is not advertising. */
+    suspend fun probe(settings: X4Settings): X4Found
+    suspend fun showText(settings: X4Settings, markdown: String): X4ShowResult
 }
 
 /**
@@ -51,15 +57,15 @@ class X4McpClient(
     private val connectTimeoutMs: Int = 4_000,
     /** show_text lays out up to 24 pages before it replies. */
     private val sendReadTimeoutMs: Int = 30_000,
-) : X4Gateway {
+) {
     private val lock = Mutex()
 
-    override suspend fun probe(baseUrl: String): X4Status = session(baseUrl, probeTimeoutMs, probeTimeoutMs) { s ->
+    suspend fun probe(baseUrl: String): X4Status = session(baseUrl, probeTimeoutMs, probeTimeoutMs) { s ->
         s.initialize()
         X4Status(s.callTool("panel_status", JSONObject()).text)
     }
 
-    override suspend fun showText(baseUrl: String, markdown: String): X4ShowResult =
+    suspend fun showText(baseUrl: String, markdown: String): X4ShowResult =
         session(baseUrl, connectTimeoutMs, sendReadTimeoutMs) { s ->
             s.initialize()
             s.notifyInitialized()

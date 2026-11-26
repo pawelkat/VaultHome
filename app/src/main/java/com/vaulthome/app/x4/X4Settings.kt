@@ -5,19 +5,29 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * Where the XTEINK X4 e-ink panel's MCP server lives (`POST {baseUrl}/mcp`, port 80, plain http).
- * The address is DHCP: [DEFAULT_X4_URL] is only the last known lease (boot of 2026-11-01). The panel prints its
- * current address on the glass; type that here when it changes. VaultHome never guesses other hosts.
+ * How to find the XTEINK X4 over BLE (vault note "Grok Bot - X4 BLE").
+ * The flashed image (`baac775`) has no Wi-Fi MCP: match the advertised name and optional address hint.
+ * There is no pairing step; the OS "available devices" list will not show it.
  */
-data class X4Settings(val baseUrl: String = DEFAULT_X4_URL) {
-    companion object {
-        /** Last DHCP lease seen on the X4 (vault note "Grok Bot - X4 markdown"). */
-        const val DEFAULT_X4_URL = "http://192.168.1.27"
+data class X4Settings(
+    val deviceName: String = X4Ble.DEFAULT_NAME,
+    val addressHint: String = X4Ble.DEFAULT_ADDRESS,
+) {
+    val label: String get() = if (addressHint.isNotBlank()) "$deviceName · $addressHint" else deviceName
 
-        /** CrowPanel 5.79 (`vault-home-panel` default). Never a target for notes or answers. */
+    companion object {
+        fun normalizeName(raw: String): String = X4Ble.normalizeName(raw)
+        fun normalizeAddress(raw: String): String = X4Ble.normalizeAddress(raw)
+
+        /** Why [addressHint] must not be used as a scan filter, or null when it is a MAC. */
+        fun addressProblem(addressHint: String): String? =
+            if (X4Ble.isValidAddress(addressHint)) null
+            else "Use a Bluetooth address like ${X4Ble.DEFAULT_ADDRESS}"
+
+        // Kept for the unused Wi-Fi MCP client (X4McpClient) and its tests.
+        const val DEFAULT_X4_URL = "http://192.168.1.27"
         const val CROWPANEL_HOST = "192.168.1.26"
 
-        /** Trims, adds `http://`, drops trailing slashes and a trailing `/mcp`. Blank → [DEFAULT_X4_URL]. */
         fun normalizeBaseUrl(raw: String): String {
             var url = raw.trim()
             if (url.isEmpty()) return DEFAULT_X4_URL
@@ -27,17 +37,12 @@ data class X4Settings(val baseUrl: String = DEFAULT_X4_URL) {
             return url
         }
 
-        /** Host part of a normalized base URL, e.g. `192.168.1.27` from `http://192.168.1.27:80`. */
         fun host(baseUrl: String): String =
             baseUrl.substringAfter("://").substringBefore('/').substringBefore(':')
 
         fun port(baseUrl: String): Int =
             baseUrl.substringAfter("://").substringBefore('/').substringAfter(':', "80").toIntOrNull() ?: 80
 
-        /**
-         * Why [baseUrl] must not be used, or null when it is fine. Only plain http to a LAN/loopback host; never
-         * the CrowPanel.
-         */
         fun problem(baseUrl: String): String? {
             if (!baseUrl.startsWith("http://")) return "The X4 speaks plain http only (http://<ip>)"
             val host = host(baseUrl)
@@ -47,7 +52,6 @@ data class X4Settings(val baseUrl: String = DEFAULT_X4_URL) {
             return null
         }
 
-        /** Private IPv4 literal, loopback, or a `.local` / `.lan` / `.home` name. */
         fun isLanHost(host: String): Boolean {
             val h = host.lowercase()
             if (h == "localhost" || h.endsWith(".local") || h.endsWith(".lan") || h.endsWith(".home")) return true
@@ -62,14 +66,25 @@ data class X4Settings(val baseUrl: String = DEFAULT_X4_URL) {
 
 class X4SettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("vaulthome_x4", Context.MODE_PRIVATE)
-    private val flow = MutableStateFlow(X4Settings(prefs.getString(KEY_URL, null) ?: X4Settings.DEFAULT_X4_URL))
+    private val flow = MutableStateFlow(
+        X4Settings(
+            deviceName = X4Settings.normalizeName(prefs.getString(KEY_NAME, null) ?: X4Ble.DEFAULT_NAME),
+            addressHint = X4Settings.normalizeAddress(prefs.getString(KEY_ADDR, null) ?: X4Ble.DEFAULT_ADDRESS),
+        ),
+    )
     val state: StateFlow<X4Settings> = flow
 
-    fun setBaseUrl(raw: String) {
-        val next = X4Settings(X4Settings.normalizeBaseUrl(raw))
-        prefs.edit().putString(KEY_URL, next.baseUrl).apply()
+    fun setDevice(name: String, address: String) {
+        val next = X4Settings(
+            deviceName = X4Settings.normalizeName(name),
+            addressHint = X4Settings.normalizeAddress(address),
+        )
+        prefs.edit().putString(KEY_NAME, next.deviceName).putString(KEY_ADDR, next.addressHint).apply()
         flow.value = next
     }
 
-    private companion object { const val KEY_URL = "x4_base_url" }
+    private companion object {
+        const val KEY_NAME = "x4_ble_name"
+        const val KEY_ADDR = "x4_ble_address"
+    }
 }
