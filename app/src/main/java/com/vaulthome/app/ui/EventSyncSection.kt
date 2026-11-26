@@ -3,6 +3,9 @@ package com.vaulthome.app.ui
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -51,6 +54,7 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit, onRequestNotifications: () -
     var tailnet by remember { mutableStateOf(settings.tailnetName) }
     var notify by remember { mutableStateOf(settings.notifySynced) }
     var useShared by remember { mutableStateOf(settings.useSharedEndpoints) }
+    var add by remember { mutableStateOf("") }
     val writeGranted = remember(svc, settings) {
         val tree = graph.store.treeUri()
         tree != null && ctx.contentResolver.persistedUriPermissions.any { it.uri == tree && it.isWritePermission }
@@ -93,22 +97,64 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit, onRequestNotifications: () -
         modifier = Modifier.fillMaxWidth(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
     )
-    OutlinedTextField(
-        value = connect,
-        onValueChange = { connect = it },
-        label = { Text("Connect endpoints (Zenoh connect list), comma separated", color = Muted) },
-        singleLine = false,
-        modifier = Modifier.fillMaxWidth(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
-    )
+    Text("Zenoh router list", color = Ink)
     Text(
-        "Defaults: note4, nitro5, Latitude and desktop-sdf3lgo on the tailnet. Hosts without a router just fail to dial " +
-            "and are retried. The Grok Bot box (grokbot-user-155710816) is not dialable: its hub connects out to a router, " +
-            "e.g. this phone in Router mode.",
+        "Routers this phone dials, in order. Add one per row or paste several separated by comma, space or a new line " +
+            "(tcp/host:7447 — also udp, tls, quic). Duplicates are dropped. Zenoh tries the next one if a host is down. " +
+            "This list is used first; if “Use shared endpoint list” is on, dialable routers and other devices from " +
+            "app_settings/VaultEvents/endpoints.json are added after it (they do not replace what you type). " +
+            "The Grok Bot box is outbound-only and is never dialed. The chat-proxy tailnet suffix is taken from the first " +
+            "*.ts.net entry here.",
         color = Hint, style = MaterialTheme.typography.bodySmall,
     )
+    val routers = EventSyncSettings.parseList(connect)
+    routers.forEachIndexed { i, ep ->
+        val err = EventSyncSettings.endpointProblem(ep)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = ep,
+                onValueChange = { raw ->
+                    val parts = EventSyncSettings.parseList(raw)
+                    val next = routers.take(i) + parts + routers.drop(i + 1)
+                    connect = EventSyncSettings.encodeList(next.distinct())
+                },
+                label = { Text("Router ${i + 1}", color = Muted) },
+                isError = err != null,
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
+            )
+            TextButton(onClick = { connect = EventSyncSettings.encodeList(routers.filterIndexed { j, _ -> j != i }) }) { Text("Remove") }
+        }
+        if (err != null) Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    }
+    val addProblem = add.trim().takeIf { it.isNotEmpty() }?.let { raw ->
+        EventSyncSettings.parseList(raw).mapNotNull { EventSyncSettings.endpointProblem(it) }.firstOrNull()
+    }
+    fun addRouters() {
+        val parts = EventSyncSettings.parseList(add)
+        if (parts.isEmpty()) return
+        connect = EventSyncSettings.encodeList((routers + parts).distinct())
+        add = ""
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = add,
+            onValueChange = { add = it },
+            label = { Text("Add router", color = Muted) },
+            placeholder = { Text("tcp/n910c.tailf52603.ts.net:7447", color = Hint) },
+            isError = addProblem != null,
+            singleLine = false,
+            modifier = Modifier.weight(1f),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { addRouters() }),
+        )
+        TextButton(enabled = EventSyncSettings.parseList(add).isNotEmpty(), onClick = { addRouters() }) { Text("Add") }
+    }
+    if (addProblem != null) Text(addProblem, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    if (routers.isEmpty()) Text("The list is empty — add at least one router to connect in Client mode.", color = Hint, style = MaterialTheme.typography.bodySmall)
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column2("Use shared endpoint list", "Read and update ${com.vaulthome.events.SharedEndpoints.PATH} in the vault: adds other devices' routers to the connect list and writes this phone's entry (device, mode, listen, Tailscale name, last seen).", Modifier.weight(1f))
+        Column2("Use shared endpoint list", "Read and update ${com.vaulthome.events.SharedEndpoints.PATH} in the vault. Those routers are appended after the Zenoh router list above (this list stays first). Also writes this phone's entry (device, mode, listen, Tailscale name, last seen).", Modifier.weight(1f))
         Switch(checked = useShared, onCheckedChange = { useShared = it })
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

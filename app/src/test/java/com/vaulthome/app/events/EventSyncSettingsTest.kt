@@ -69,4 +69,62 @@ class EventSyncSettingsTest {
         assertNull(EventSyncSettings(connect = listOf("tcp/100.101.102.103:7447", "tcp/[fd7a:115c::1]:7447")).problem())
         assertEquals(listOf("tcp/a:1", "tcp/b:2"), EventSyncSettings.parseList(" tcp/a:1, tcp/b:2\ntcp/a:1 "))
     }
+
+    @Test
+    fun parseListAcceptsCommaSpaceNewlineAndSemicolonAndDedupes() {
+        val n910c = "tcp/n910c.tailf52603.ts.net:7447"
+        val nitro = "tcp/nitro5.tailf52603.ts.net:7447"
+        // The string Pawel tried in Settings (no space after the comma).
+        assertEquals(listOf(n910c, nitro), EventSyncSettings.parseList("$n910c,$nitro"))
+        assertEquals(listOf(n910c, nitro), EventSyncSettings.parseList("$n910c, $nitro"))
+        assertEquals(listOf(n910c, nitro), EventSyncSettings.parseList("$n910c\n$nitro"))
+        assertEquals(listOf(n910c, nitro), EventSyncSettings.parseList("$n910c; $nitro"))
+        assertEquals(listOf(n910c, nitro), EventSyncSettings.parseList("  $n910c  $nitro  $n910c "))
+        assertEquals(emptyList<String>(), EventSyncSettings.parseList("  , ; \n "))
+    }
+
+    @Test
+    fun loadConnectMigratesASingleStoredValueAndASeparatedList() {
+        val one = "tcp/note4.tailf52603.ts.net:7447"
+        assertEquals(EventSyncSettings.DEFAULT_CONNECT_LIST, EventSyncSettings.loadConnect(null))
+        assertEquals(listOf(one), EventSyncSettings.loadConnect(one))
+        assertEquals(
+            listOf("tcp/n910c.tailf52603.ts.net:7447", "tcp/nitro5.tailf52603.ts.net:7447"),
+            EventSyncSettings.loadConnect("tcp/n910c.tailf52603.ts.net:7447,tcp/nitro5.tailf52603.ts.net:7447"),
+        )
+        assertEquals(emptyList<String>(), EventSyncSettings.loadConnect(""))
+        assertEquals("tcp/a:1,tcp/b:2", EventSyncSettings.encodeList(listOf("tcp/a:1", "tcp/b:2")))
+        assertEquals(listOf("tcp/a:1", "tcp/b:2"), EventSyncSettings.parseList(EventSyncSettings.encodeList(listOf("tcp/a:1", "tcp/b:2"))))
+    }
+
+    @Test
+    fun perEntryValidationAndProblem() {
+        val good = listOf("tcp/n910c.tailf52603.ts.net:7447", "tcp/nitro5.tailf52603.ts.net:7447")
+        assertEquals(emptyList<Pair<Int, String>>(), EventSyncSettings.entryProblems(good))
+        assertNull(EventSyncSettings(connect = good).problem())
+        val mixed = listOf("tcp/n910c.tailf52603.ts.net:7447", "note4:7447", "tcp/nitro5:99999")
+        val problems = EventSyncSettings.entryProblems(mixed)
+        assertEquals(listOf(1, 2), problems.map { it.first })
+        assertTrue(problems[0].second.contains("note4:7447"))
+        assertTrue(problems[1].second.contains("65535"))
+        assertNotNull(EventSyncSettings(connect = mixed).problem())
+        assertNull(EventSyncSettings.endpointProblem("tls/box.tailf52603.ts.net:7447"))
+        assertNull(EventSyncSettings.endpointProblem("udp/192.168.1.29:7447"))
+        assertNull(EventSyncSettings.endpointProblem("quic/n910c.tailf52603.ts.net:7447"))
+    }
+
+    @Test
+    fun zenohConfigContainsEveryRouterInOrder() {
+        val routers = listOf("tcp/n910c.tailf52603.ts.net:7447", "tcp/nitro5.tailf52603.ts.net:7447")
+        val inserts = EventSyncSettings(connect = routers).linkConfig().inserts().toMap()
+        assertEquals("[\"tcp/n910c.tailf52603.ts.net:7447\",\"tcp/nitro5.tailf52603.ts.net:7447\"]", inserts["connect/endpoints"])
+        // Shared endpoints.json is appended after the Settings list, and does not drop what the user typed.
+        val shared = com.vaulthome.events.SharedEndpoints.parse(
+            com.vaulthome.events.SharedEndpoints.mergeSelf(null, EventSyncSettings().selfEntry(), 0L)!!,
+        )
+        val merged = EventSyncSettings(connect = routers).linkConfig(shared).connect
+        assertEquals(routers, merged.take(2))
+        assertTrue(merged.contains("tcp/note4.tailf52603.ts.net:7447"))
+        assertEquals(routers, EventSyncSettings(connect = routers, useSharedEndpoints = false).linkConfig(shared).connect)
+    }
 }
