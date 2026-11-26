@@ -78,12 +78,10 @@ object SharedEndpoints {
         return "${m.groupValues[1].lowercase()}/$host:$port"
     }
 
-    /** Known hosts on Pawel's tailnet (names from vault notes / tailnet DNS), used to seed the file. */
+    /** Planned or running Zenoh routers used only to seed a missing endpoints.json. Not every tailnet host. */
     val DEFAULT_ROUTERS: List<RouterEntry> = listOf(
-        RouterEntry("note4", "tcp/note4.tailf52603.ts.net:7447", note = "planned always-on router (Termux, on charger); not on the tailnet on 2026-11-18"),
-        RouterEntry("nitro5", "tcp/nitro5.tailf52603.ts.net:7447", tailnetName = "nitro5.tailf52603.ts.net", note = "Nitro WSL; no router running yet; sleeps when the lid closes"),
-        RouterEntry("latitude", "tcp/pawelk-latitude-5300.tailf52603.ts.net:7447", tailnetName = "pawelk-latitude-5300.tailf52603.ts.net", note = "Latitude 5300; no router running yet"),
-        RouterEntry("desktop-sdf3lgo", "tcp/desktop-sdf3lgo.tailf52603.ts.net:7447", tailnetName = "desktop-sdf3lgo.tailf52603.ts.net", note = "WSL host; no router running yet"),
+        RouterEntry("note4c", "tcp/n910c.tailf52603.ts.net:7447", tailnetName = "n910c.tailf52603.ts.net", note = "Always-on Zenoh router on note4c (SM-N910C). MagicDNS is n910c, not note4."),
+        RouterEntry("nitro5", "tcp/nitro5.tailf52603.ts.net:7447", tailnetName = "nitro5.tailf52603.ts.net", note = "Nitro WSL zenohd; sleeps when the lid closes"),
         RouterEntry(
             "box", endpoint = null, tailnetName = "grokbot-user-155710816.tailf52603.ts.net", dialable = false,
             note = "Grok Bot box hub (stores events). Outbound-only: it dials routers listed here or in VAULT_EVENTS_HUB_CONNECT. Not a connect endpoint.",

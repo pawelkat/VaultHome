@@ -23,6 +23,8 @@ class SharedEndpointsTest {
         val box = cfg.routers.single { it.id == "box" }
         assertEquals(false, box.dialable)
         assertNull(box.endpoint)
+        assertTrue(cfg.routers.none { it.id == "latitude" || it.id == "desktop-sdf3lgo" })
+        assertEquals(listOf("note4c", "nitro5", "box"), cfg.routers.map { it.id })
         assertTrue(String(out).contains("\"schemaVersion\": 1"))
     }
 
@@ -69,9 +71,8 @@ class SharedEndpointsTest {
         assertEquals(
             listOf(
                 "tcp/note4.tailf52603.ts.net:7447",
+                "tcp/n910c.tailf52603.ts.net:7447",
                 "tcp/nitro5.tailf52603.ts.net:7447",
-                "tcp/pawelk-latitude-5300.tailf52603.ts.net:7447",
-                "tcp/desktop-sdf3lgo.tailf52603.ts.net:7447",
                 "tcp/192.168.1.10:7447",
             ),
             list,

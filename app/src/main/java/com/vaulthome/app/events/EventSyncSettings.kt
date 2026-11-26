@@ -65,9 +65,9 @@ data class EventSyncSettings(
 
     companion object {
         const val DEFAULT_DEVICE = "s24"
-        const val DEFAULT_CONNECT = "tcp/note4.tailf52603.ts.net:7447"
+        const val DEFAULT_CONNECT = "tcp/n910c.tailf52603.ts.net:7447"
 
-        /** note4 plus the other tailnet hosts that could run a router (dialable entries of [SharedEndpoints.DEFAULT_ROUTERS]). */
+        /** Dialable entries of [SharedEndpoints.DEFAULT_ROUTERS] (note4c and nitro5). */
         val DEFAULT_CONNECT_LIST: List<String> = SharedEndpoints.DEFAULT_ROUTERS.filter { it.dialable }.mapNotNull { it.endpoint }
 
         /** From the vault note nitro5 (tailnet peers seen 2026-10-31). */

@@ -15,10 +15,8 @@ class EventSyncSettingsTest {
         assertEquals("s24", s.device)
         assertEquals(
             listOf(
-                "tcp/note4.tailf52603.ts.net:7447",
+                "tcp/n910c.tailf52603.ts.net:7447",
                 "tcp/nitro5.tailf52603.ts.net:7447",
-                "tcp/pawelk-latitude-5300.tailf52603.ts.net:7447",
-                "tcp/desktop-sdf3lgo.tailf52603.ts.net:7447",
             ),
             s.connect,
         )
@@ -46,6 +44,8 @@ class EventSyncSettingsTest {
         val merged = s.linkConfig(shared).connect
         assertEquals("tcp/note4.tailf52603.ts.net:7447", merged.first())
         assertTrue(merged.contains("tcp/nitro5.tailf52603.ts.net:7447"))
+        assertTrue(merged.contains("tcp/n910c.tailf52603.ts.net:7447"))
+        assertTrue(merged.none { it.contains("latitude") || it.contains("desktop-sdf3lgo") })
         assertTrue(merged.none { it.contains("pawels-s24-ultra") || it.contains("grokbot") })
         assertEquals(listOf("tcp/note4.tailf52603.ts.net:7447"), s.copy(useSharedEndpoints = false).linkConfig(shared).connect)
         assertNotNull(s.copy(tailnetName = "bad name").problem())
@@ -124,7 +124,8 @@ class EventSyncSettingsTest {
         )
         val merged = EventSyncSettings(connect = routers).linkConfig(shared).connect
         assertEquals(routers, merged.take(2))
-        assertTrue(merged.contains("tcp/note4.tailf52603.ts.net:7447"))
+        assertTrue(merged.contains("tcp/n910c.tailf52603.ts.net:7447"))
+        assertTrue(merged.none { it.contains("latitude") || it.contains("desktop-sdf3lgo") })
         assertEquals(routers, EventSyncSettings(connect = routers, useSharedEndpoints = false).linkConfig(shared).connect)
     }
 }
