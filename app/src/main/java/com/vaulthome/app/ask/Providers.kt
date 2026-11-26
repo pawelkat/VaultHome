@@ -30,6 +30,11 @@ data class Provider(
     val maxTokensSuggest: Int?,
     /** True when synthesised from Settings URLs (no manifest seen); readiness is then decided by `/health`. */
     val fromSettings: Boolean = false,
+    /**
+     * Optional caps v1 field: URL prefix of vault file links this provider emits
+     * (e.g. `https://towerx.tailf52603.ts.net/vault/`). Absent or unknown keys are ignored.
+     */
+    val linkBase: String? = null,
 ) {
     val isChat: Boolean get() = kind == KIND_CHAT && transport == TRANSPORT_PROXY
 
@@ -84,6 +89,7 @@ object ProviderManifest {
             ready = o.optBoolean("ready", false),
             nCtx = positive(o, "n_ctx"),
             maxTokensSuggest = positive(o, "max_tokens_suggest"),
+            linkBase = o.optString("linkBase").ifBlank { o.optString("link_base") }.ifBlank { null },
         )
     }
 

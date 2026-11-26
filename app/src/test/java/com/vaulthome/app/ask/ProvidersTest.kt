@@ -49,6 +49,19 @@ class ProvidersTest {
         assertFalse(list[0].ready)
     }
 
+    @Test fun optionalLinkBaseIsReadAndUnknownKeysAreIgnored() {
+        val list = ProviderManifest.parse(
+            """{"schemaVersion":1,"device":"towerx","providers":[
+                {"id":"t","kind":"llm-chat","endpoint":"https://towerx.tailf52603.ts.net/v1/chat/completions",
+                 "transport":"chat-proxy","linkBase":"https://towerx.tailf52603.ts.net/vault/","extra":1}
+            ]}"""
+        ).getOrThrow()
+        assertEquals("https://towerx.tailf52603.ts.net/vault/", list.single().linkBase)
+        assertNull(ProviderManifest.parse(
+            """{"schemaVersion":1,"device":"d","providers":[{"id":"a","kind":"llm-chat"}]}"""
+        ).getOrThrow().single().linkBase)
+    }
+
     @Test fun capsKey() = assertEquals("vault/caps/nitro5", ProviderManifest.key("nitro5"))
 
     private fun avail(
