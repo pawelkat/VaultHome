@@ -81,6 +81,19 @@ class SyncNoticesTest {
     }
 
     @Test
+    fun vaultHomeHistoryFileSyncsSilently() {
+        val box = tmp.newFolder("box"); val s24 = tmp.newFolder("s24")
+        val cBox = core(box, "box"); val cS24 = core(s24, "s24")
+        box.put("app_settings/VaultHome/history.json", "{}")
+        val ev = cBox.onLocal("app_settings/VaultHome/history.json")!!
+        val a = cS24.onIncoming(ev)
+        assertTrue(a.changed)
+        assertTrue(SyncNotices.fromIncoming(ev, a, "s24").isEmpty())
+        assertTrue(SyncNotices.isSilent("app_settings/VaultEvents/endpoints.json"))
+        assertTrue(!SyncNotices.isSilent("app_settings/GymMonth/settings.md"))
+    }
+
+    @Test
     fun planGroupsManyIntoOneSummary() {
         val few = (1..3).map { SyncedNote("Notes/n$it.md", "box") }
         assertEquals(few.map { Notice.Single(it) }, SyncNotices.plan(few, catchUp = true))

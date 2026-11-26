@@ -4,6 +4,8 @@ import com.vaulthome.app.model.Embedder
 import com.vaulthome.app.model.ModelStore
 import com.vaulthome.app.vault.VaultReader
 import com.vaulthome.app.vault.VaultStore
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class Indexer(
     private val store: VaultStore,
@@ -14,7 +16,68 @@ class Indexer(
     private val status: IndexStatusStore,
     private val tags: TagIndex,
 ) {
-    suspend fun indexAll() {
+    /** One index run at a time: the manual/Worker full pass and the Zenoh-event passes never interleave. */
+    private val runLock = Mutex()
+
+    suspend fun indexAll() = runLock.withLock { indexAllLocked() }
+
+    /**
+     * Event-driven pass for the notes a sync just changed: re-embed those that exist, drop those that are gone.
+     * No directory walk and no model download; returns false (nothing done) when the model is not on the phone yet
+     * or the vault is not granted, so the caller can fall back to a full [indexAll] later.
+     */
+    suspend fun indexPaths(paths: Collection<String>): Boolean = runLock.withLock {
+        if (!store.hasReadAccess() || !models.isReady()) return@withLock false
+        val wanted = paths.filter(ReindexPlan::isIndexable).distinct()
+        if (wanted.isEmpty()) return@withLock true
+        reader.invalidate()
+        var done = 0
+        var removed = 0
+        var failures = 0
+        wanted.forEachIndexed { i, path ->
+            status.update(IndexProgress(phase = "indexing", message = "Embedding ${i + 1} of ${wanted.size} synced notes", done = i, total = wanted.size))
+            val file = reader.findByPath(path)
+            if (file == null) {
+                dao.deleteChunks(path); dao.deleteNote(path); tags.remove(path); removed++
+            } else if (embedNote(path, file)) done++ else failures++
+        }
+        runCatching { tags.save() }
+        status.update(
+            IndexProgress(
+                phase = "ready",
+                message = "Synced: embedded $done, removed $removed" + (if (failures > 0) ", $failures skipped" else "") + ". ${dao.chunkCount()} chunks.",
+                done = wanted.size, total = wanted.size,
+            ),
+        )
+        true
+    }
+
+    /** Embeds one note into the index; false when it could not be read or embedded. */
+    private suspend fun embedNote(path: String, file: com.vaulthome.app.vault.VaultFile): Boolean = try {
+        val text = reader.readText(file.uri)
+        dao.deleteChunks(path)
+        if (text == null) {
+            false
+        } else {
+            tags.put(path, com.vaulthome.app.search.SearchFilter.extractTags(text))
+            val rows = Chunker.chunk(path, text).map { draft ->
+                ChunkEntity(
+                    path = path, heading = draft.heading, chunkText = draft.text,
+                    vector = Vectors.floatsToBytes(embedder.embed(Prefixes.chunk(draft.title, draft.text))),
+                    sourceMtime = file.mtime,
+                )
+            }
+            if (rows.isNotEmpty()) dao.insertChunks(rows)
+            dao.upsertNote(NoteEntity(path = path, mtime = file.mtime))
+            true
+        }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        false
+    }
+
+    private suspend fun indexAllLocked() {
         if (!store.hasReadAccess()) {
             status.update(IndexProgress(phase = "error", message = "Grant the Vault folder first"))
             return
@@ -49,30 +112,7 @@ class Indexer(
                 ),
             )
             val file = scanned.first { it.relativePath == path }
-            try {
-                val text = reader.readText(file.uri)
-                dao.deleteChunks(path)
-                if (text == null) {
-                    failures += 1
-                    return@forEachIndexed
-                }
-                tags.put(path, com.vaulthome.app.search.SearchFilter.extractTags(text))
-                val drafts = Chunker.chunk(path, text)
-                val rows = drafts.map { draft ->
-                    val vector = embedder.embed(Prefixes.chunk(draft.title, draft.text))
-                    ChunkEntity(
-                        path = path,
-                        heading = draft.heading,
-                        chunkText = draft.text,
-                        vector = Vectors.floatsToBytes(vector),
-                        sourceMtime = file.mtime,
-                    )
-                }
-                if (rows.isNotEmpty()) dao.insertChunks(rows)
-                dao.upsertNote(NoteEntity(path = path, mtime = file.mtime))
-            } catch (_: Exception) {
-                failures += 1
-            }
+            if (!embedNote(path, file)) failures += 1
         }
         // Backfill tags for unchanged notes indexed before the tag index existed (read only, no embedding).
         scanned.filter { !tags.has(it.relativePath) }.forEach { f ->

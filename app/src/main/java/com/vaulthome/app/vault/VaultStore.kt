@@ -14,6 +14,11 @@ class VaultStore(context: Context) {
         return resolver.persistedUriPermissions.any { it.uri == uri && it.isReadPermission }
     }
 
+    fun hasWriteAccess(): Boolean {
+        val uri = treeUri() ?: return false
+        return resolver.persistedUriPermissions.any { it.uri == uri && it.isWritePermission }
+    }
+
     fun setTreeUri(uri: Uri) {
         prefs.edit().putString(KEY_TREE, uri.toString()).apply()
     }

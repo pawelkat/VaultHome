@@ -127,7 +127,12 @@ class EventSyncService : Service() {
                 mutable.value = EventSyncState(running = true, status = st, endpoint = endpoint(st.connect.ifEmpty { link.connect }))
                 notifyStatus(settings, st)
             },
-            onVaultChanged = { g.reader.invalidate() },
+            onVaultChanged = { changed ->
+                g.reader.invalidate()
+                // The sync just applied these notes: embed them now (debounced); another device's history.json is merged in.
+                g.eventReindexer.onVaultChanged(changed)
+                if (com.vaulthome.app.search.QueryHistory.VAULT_PATH in changed) g.queryHistory.sync()
+            },
             log = { Log.i(TAG, it) },
             // Shared endpoint list in the vault: read before each connect, self entry merged after the first catch-up
             // (so the hub's newer copy is applied first and other devices' entries are kept).
@@ -135,6 +140,9 @@ class EventSyncService : Service() {
                 if (!settings.useSharedEndpoints) cfg else settings.linkConfig(SharedEndpoints.parse((fs.read(SharedEndpoints.PATH) as? Disk.Present)?.bytes))
             },
             onConnected = {
+                // Caught up with the hub: one incremental pass picks up anything the live events did not list.
+                g.eventReindexer.requestFull()
+                g.queryHistory.sync()
                 if (settings.useSharedEndpoints) {
                     val disk = fs.read(SharedEndpoints.PATH)
                     if (disk !is Disk.Skipped) {
