@@ -203,4 +203,109 @@ private fun X4SettingsSection() {
             "and on an Ask answer sends the answer as shown. Up to 32,000 characters; VaultKeep is never sent.",
         color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
     )
+    X4McpServerSection()
+}
+
+/** VaultHome's own display MCP for Grok Bot: POST /mcp on this phone, forwarded to the X4 over BLE. */
+@Composable
+private fun X4McpServerSection() {
+    val ctx = LocalContext.current
+    val store = (ctx.applicationContext as com.vaulthome.app.VaultHomeApp).graph.x4Settings
+    val server by store.server.collectAsStateWithLifecycle()
+    val running by com.vaulthome.app.x4.mcp.X4McpService.state.collectAsStateWithLifecycle()
+    var portText by remember { mutableStateOf(server.port.toString()) }
+    val portValue = com.vaulthome.app.x4.mcp.X4McpHttpServer.parsePort(portText)
+    var urls by remember { mutableStateOf(emptyList<com.vaulthome.app.x4.mcp.X4McpHttpServer.Companion.ListenUrl>()) }
+    LaunchedEffect(running, server.port) {
+        urls = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.vaulthome.app.x4.mcp.X4McpHttpServer.listenUrls(
+                server.port, com.vaulthome.app.x4.mcp.X4McpHttpServer.localIpv4(),
+            )
+        }
+    }
+    val enable = {
+        val port = portValue ?: server.port
+        store.setServer(true, port)
+        portText = port.toString()
+        com.vaulthome.app.x4.mcp.X4McpService.start(ctx)
+    }
+    val needed = buildList {
+        addAll(com.vaulthome.app.x4.X4BlePermissions.required())
+        if (android.os.Build.VERSION.SDK_INT >= 33) add(android.Manifest.permission.POST_NOTIFICATIONS)
+    }.toTypedArray()
+    // Enable anyway after the dialog: show_text / panel_status then report "Bluetooth permission needed".
+    val askPermissions = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions(),
+    ) { enable() }
+
+    Text("X4 MCP server (for Grok Bot)", style = MaterialTheme.typography.titleSmall, color = Ink)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Switch(
+            checked = server.enabled,
+            onCheckedChange = { on ->
+                if (on) {
+                    val missing = needed.any {
+                        androidx.core.content.ContextCompat.checkSelfPermission(ctx, it) !=
+                            android.content.pm.PackageManager.PERMISSION_GRANTED
+                    }
+                    if (missing) askPermissions.launch(needed) else enable()
+                } else {
+                    store.setServer(false, server.port)
+                    com.vaulthome.app.x4.mcp.X4McpService.stop(ctx)
+                }
+            },
+        )
+        Text(
+            when {
+                running.running -> "Listening on port ${running.port}"
+                server.enabled && running.error != null -> "Not listening: ${running.error}"
+                server.enabled -> "Starting…"
+                else -> "Off"
+            },
+            color = if (running.error != null && server.enabled) MaterialTheme.colorScheme.error else Muted,
+        )
+    }
+    OutlinedTextField(
+        value = portText,
+        onValueChange = { portText = it.filter(Char::isDigit).take(5) },
+        label = { Text("MCP port (default ${com.vaulthome.app.x4.X4McpServerSettings.DEFAULT_PORT})", color = Muted) },
+        singleLine = true,
+        isError = portValue == null,
+        modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = {
+            val p = portValue ?: return@KeyboardActions
+            store.setServer(server.enabled, p)
+            if (server.enabled) com.vaulthome.app.x4.mcp.X4McpService.start(ctx)
+        }),
+    )
+    if (portValue == null) {
+        Text("Port must be 1024–65535", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    } else if (portValue != server.port) {
+        OutlinedButton(onClick = {
+            store.setServer(server.enabled, portValue)
+            if (server.enabled) com.vaulthome.app.x4.mcp.X4McpService.start(ctx)
+        }) { Text("Use port $portValue") }
+    }
+    if (server.enabled) {
+        Text("Connect URLs:", color = Muted, style = MaterialTheme.typography.bodySmall)
+        urls.forEach { u ->
+            androidx.compose.foundation.text.selection.SelectionContainer {
+                Text("${u.url}  (${u.kind})", color = Ink, style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        if (urls.none { it.kind == "Tailscale" }) {
+            Text(
+                "No Tailscale address (100.x) found — open the Tailscale app and connect so Grok Bot can reach this phone.",
+                color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+    Text(
+        "Grok Bot calls POST /mcp here (initialize 2025-03-26, then tools/call show_text with the markdown unchanged). " +
+            "VaultHome forwards it to the X4 over Bluetooth LE, not Wi-Fi, and reports success only when the reader " +
+            "answers pages:N. No authentication yet — anyone who can reach this port can show text on the X4. " +
+            "Keep the notification running; if Android stops it, open VaultHome to restart it.",
+        color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
+    )
 }
