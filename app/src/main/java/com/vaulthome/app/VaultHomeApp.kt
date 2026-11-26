@@ -52,6 +52,8 @@ class AppGraph(app: Application) {
     val searcher = Searcher(database.chunks(), embedder)
     val askSettings = com.vaulthome.app.ask.AskSettingsStore(app)
     val nitro = com.vaulthome.app.ask.NitroClient()
+    val x4Settings = com.vaulthome.app.x4.X4SettingsStore(app)
+    val x4: com.vaulthome.app.x4.X4Gateway = com.vaulthome.app.x4.X4McpClient()
     val askOrchestrator = com.vaulthome.app.ask.AskOrchestrator(
         nitro = nitro,
         settings = { askSettings.state.value },

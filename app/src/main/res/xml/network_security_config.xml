@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- HTTPS everywhere (model downloads, links, Tailscale https://nitro5.tailf52603.ts.net). Plain http only to
-     Nitro's chat proxy on the home LAN (192.168.1.18:8082) and to localhost, for the Ask path. No API key. -->
+     Nitro's chat proxy on the home LAN (192.168.1.18:8082) and to localhost, for the Ask path. No API key.
+     The X4 e-ink MCP (last DHCP lease 192.168.1.27) is listed too, although X4McpClient talks over one raw
+     java.net.Socket (the firmware refuses a second TCP connection), which this policy does not govern; that client
+     enforces its own rule instead: plain http only to private LAN / loopback hosts and never the CrowPanel. -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="false">192.168.1.18</domain>
+        <domain includeSubdomains="false">192.168.1.27</domain>
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>
     </domain-config>

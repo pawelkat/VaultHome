@@ -95,6 +95,7 @@ fun SettingsScreen(
             Text("Model is in app storage", color = Color(0xFF8A8A8A))
         }
         if (askViewModel != null) AskSettingsSection(askViewModel)
+        X4SettingsSection()
     }
 }
 
@@ -147,4 +148,42 @@ private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
         Text(label, color = Ink, modifier = Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onChange)
     }
+}
+
+@Composable
+private fun X4SettingsSection() {
+    val ctx = LocalContext.current
+    val store = (ctx.applicationContext as com.vaulthome.app.VaultHomeApp).graph.x4Settings
+    val x4: com.vaulthome.app.x4.X4ViewModel = androidx.lifecycle.viewmodel.compose.viewModel()
+    val settings by store.state.collectAsStateWithLifecycle()
+    val state by x4.state.collectAsStateWithLifecycle()
+    var url by remember { mutableStateOf(settings.baseUrl) }
+    val save = {
+        store.setBaseUrl(url); url = store.state.value.baseUrl; x4.probe(force = true)
+    }
+    Text("X4 e-ink", style = MaterialTheme.typography.titleMedium, color = Ink)
+    OutlinedTextField(
+        value = url,
+        onValueChange = { url = it },
+        label = { Text("X4 MCP address", color = Muted) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { save() }),
+    )
+    com.vaulthome.app.x4.X4Settings.problem(com.vaulthome.app.x4.X4Settings.normalizeBaseUrl(url))?.let {
+        Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { save() }) { Text("Save & test") }
+        TextButton(onClick = { url = com.vaulthome.app.x4.X4Settings.DEFAULT_X4_URL; save() }) { Text("Last known") }
+    }
+    Text(com.vaulthome.app.x4.X4Text.detect(state.detect), color = Color(0xFF8A8A8A))
+    Text(
+        "The X4 gets its address by DHCP; the last one seen was 192.168.1.27. When it changes, type the address " +
+            "printed on the glass (http://<ip>, VaultHome adds /mcp). Not the CrowPanel (192.168.1.26). " +
+            "When the X4 answers, the X4 button on a note sends its raw markdown and on an Ask answer sends the answer " +
+            "as shown. Up to 32,000 characters; VaultKeep is never sent.",
+        color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
+    )
 }
