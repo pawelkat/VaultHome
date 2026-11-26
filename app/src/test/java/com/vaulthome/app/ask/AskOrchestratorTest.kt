@@ -36,7 +36,7 @@ class AskOrchestratorTest {
 
     private fun orchestrator(
         nitro: NitroGateway,
-        settings: AskSettings = AskSettings(towerxEnabled = false),
+        settings: AskSettings = AskSettings(excludedProviderIds = setOf(ProviderRouting.TOWERX_PROVIDER_ID)),
         search: suspend (String) -> List<SearchHit> = { hits },
         local: AnswerEngine = LocalAnswerEngineStub,
     ) = AskOrchestrator(nitro, { settings }, search, local)
@@ -144,7 +144,7 @@ class AskOrchestratorTest {
     @Test fun requestIsSizedFromTheManifest() = runBlocking {
         val gw = FakeNitro()
         val m = mapOf("nitro5" to listOf(chatProvider("nitro5", "nitro5-qwen", nCtx = 16384, max = 2048)))
-        val out = AskOrchestrator(gw, { AskSettings(towerxEnabled = false) }, { hits }, manifests = { m }).ask("q") as AskOutcome.Nitro
+        val out = AskOrchestrator(gw, { AskSettings(excludedProviderIds = setOf(ProviderRouting.TOWERX_PROVIDER_ID)) }, { hits }, manifests = { m }).ask("q") as AskOutcome.Nitro
         assertEquals(ChatOptions(2048, null), gw.options.single())
         assertEquals(null, out.sizingNote)
     }
@@ -188,7 +188,7 @@ class AskOrchestratorTest {
 
     @Test fun nitroDisabledSkipsHealthAndFallsBackToHits() = runBlocking {
         val nitro = FakeNitro()
-        val out = orchestrator(nitro, AskSettings(nitroEnabled = false, towerxEnabled = false)).ask("watch?")
+        val out = orchestrator(nitro, AskSettings(excludedProviderIds = setOf(ProviderRouting.NITRO_PROVIDER_ID, ProviderRouting.TOWERX_PROVIDER_ID))).ask("watch?")
         out as AskOutcome.SearchOnly
         assertEquals(NitroSkip.Disabled, out.nitro)
         assertEquals(0, nitro.healthCalls)
@@ -258,7 +258,7 @@ class AskOrchestratorTest {
         val port = ServerSocket(0).use { it.localPort }
         val out = AskOrchestrator(
             NitroClient(healthTimeoutMs = 300),
-            { AskSettings(nitroBaseUrl = "http://127.0.0.1:$port", towerxEnabled = false) },
+            { AskSettings(nitroBaseUrl = "http://127.0.0.1:$port", excludedProviderIds = setOf(ProviderRouting.TOWERX_PROVIDER_ID)) },
             { hits },
         ).ask("watch?")
         out as AskOutcome.SearchOnly

@@ -106,7 +106,7 @@ data class HealthSample(val ok: Boolean, val detail: String, val atMs: Long)
 
 /**
  * Pluggable availability source: `null` = no opinion, so the next source decides. Temporary S24 sources are
- * hardcoded below (Settings switches, TowerX/Nitro5 presence + `/health`); a Zenoh caps manifest overrides them.
+ * hardcoded below (per-provider "Don't use for Ask", TowerX/Nitro5 presence + `/health`); a Zenoh caps manifest overrides them.
  */
 fun interface AvailabilitySource {
     fun availability(p: Provider): Availability?
@@ -119,14 +119,9 @@ object ProviderAvailability {
     /** On-device providers need nothing from the network. */
     val local = AvailabilitySource { p -> if (p.scope == "local") Availability.Available else null }
 
-    /** Settings keep a per-host off switch ("don't use this host"). */
+    /** Providers the user turned off with "Don't use for Ask" (keyed by provider id). */
     fun settingsSwitch(s: AskSettings) = AvailabilitySource { p ->
-        val on = when (p.device) {
-            ProviderRouting.NITRO_DEVICE -> s.nitroEnabled
-            ProviderRouting.TOWERX_DEVICE -> s.towerxEnabled
-            else -> true
-        }
-        if (on) null else Availability.Disabled
+        if (p.id in s.excludedProviderIds) Availability.Disabled else null
     }
 
     /** Zenoh presence token `vault/presence/<device>`: a token known gone means offline; alive says nothing more. */
@@ -173,11 +168,13 @@ object ProviderRouting {
     const val AUTO_PICK_DEVICE = "nitro5"
     const val NITRO_DEVICE = "nitro5"
     const val TOWERX_DEVICE = "towerx"
+    const val NITRO_PROVIDER_ID = "nitro5-qwen"
+    const val TOWERX_PROVIDER_ID = "towerx-qwen"
 
     /** Providers from the Settings URLs: used for a device until a manifest for it arrives. */
     fun fromSettings(s: AskSettings): List<Provider> = listOf(
-        legacy(NITRO_DEVICE, "nitro5-qwen", "Nitro chat proxy", s.nitroBaseUrl),
-        legacy(TOWERX_DEVICE, "towerx-qwen", "TowerX chat proxy", s.towerxBaseUrl),
+        legacy(NITRO_DEVICE, NITRO_PROVIDER_ID, "Nitro chat proxy", s.nitroBaseUrl),
+        legacy(TOWERX_DEVICE, TOWERX_PROVIDER_ID, "TowerX chat proxy", s.towerxBaseUrl),
     )
 
     private fun legacy(device: String, id: String, title: String, url: String) = Provider(

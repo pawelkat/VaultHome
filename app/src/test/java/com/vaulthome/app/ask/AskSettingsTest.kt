@@ -7,7 +7,7 @@ class AskSettingsTest {
     @Test fun defaults() {
         val s = AskSettings()
         assertEquals("http://192.168.1.18:8082", s.nitroBaseUrl)
-        assertEquals(true, s.nitroEnabled)
+        assertEquals(emptySet<String>(), s.excludedProviderIds)
         assertEquals(true, s.askEnabled)
     }
 
@@ -35,7 +35,29 @@ class AskSettingsTest {
         assertEquals(true, AskSettings(askMode = true).askActive)
         assertEquals(false, AskSettings(askEnabled = false, askMode = true).askActive)
         assertEquals(AskTarget.Remote, AskSettings().target)
-        assertEquals(AskTarget.Local, AskSettings(nitroEnabled = false, towerxEnabled = false).target)
+        assertEquals(AskTarget.Remote, AskSettings(excludedProviderIds = setOf(ProviderRouting.TOWERX_PROVIDER_ID)).target)
+        assertEquals(AskTarget.Local, AskSettings(excludedProviderIds = setOf(ProviderRouting.NITRO_PROVIDER_ID, ProviderRouting.TOWERX_PROVIDER_ID)).target)
+    }
+
+    @Test fun excludeUnpinsAndParseRoundTrips() {
+        val pinned = AskSettings(pinnedProviderId = "towerx-qwen")
+        val off = pinned.exclude("towerx-qwen", true)
+        assertEquals(setOf("towerx-qwen"), off.excludedProviderIds)
+        assertEquals(null, off.pinnedProviderId)
+        assertEquals(setOf("nitro5-qwen"), off.exclude("nitro5-qwen", true).exclude("towerx-qwen", false).excludedProviderIds)
+        assertEquals(setOf("a", "b"), AskSettings.parseIds(" b, a, b, "))
+        assertEquals("", AskSettings.encodeIds(emptySet()))
+        assertEquals("a,b", AskSettings.encodeIds(setOf("b", "a")))
+    }
+
+    @Test fun migrateExcludedOnceFromOldFlags() {
+        assertEquals(emptySet<String>(), AskSettings.migrateExcluded(null, nitroEnabled = true, towerxEnabled = true))
+        assertEquals(setOf("nitro5-qwen"), AskSettings.migrateExcluded(null, nitroEnabled = false, towerxEnabled = true))
+        assertEquals(setOf("towerx-qwen"), AskSettings.migrateExcluded(null, nitroEnabled = true, towerxEnabled = false))
+        assertEquals(setOf("nitro5-qwen", "towerx-qwen"), AskSettings.migrateExcluded(null, nitroEnabled = false, towerxEnabled = false))
+        // Already migrated: a present value (even blank) is kept; the old flags are ignored.
+        assertEquals(emptySet<String>(), AskSettings.migrateExcluded("", nitroEnabled = false, towerxEnabled = false))
+        assertEquals(setOf("mac-qwen"), AskSettings.migrateExcluded("mac-qwen", nitroEnabled = false))
     }
 
     @Test fun topBarBadgeLabels() {

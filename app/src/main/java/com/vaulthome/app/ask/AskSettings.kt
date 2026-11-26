@@ -10,30 +10,41 @@ import kotlinx.coroutines.flow.StateFlow
  *
  * @property askEnabled feature flag for Ask: shows the compact Search ↔ Ask switch in the top bar (left of Settings). Off = Search only.
  * @property askMode last chosen mode of that switch (true = Ask), persisted across restarts.
- * @property nitroEnabled try the Nitro before the on-device path.
  * @property nitroBaseUrl root of VaultSearch's **chat proxy** on Nitro (`contrib/chat_proxy.py`), which injects
  *   `System/Nitro5 Qwen.md` + the date block and runs the `vault_search` tool loop server-side, then returns a
  *   plain chat completion. Home Wi‑Fi: [DEFAULT_NITRO_URL] (`:8082`); Tailscale: [TAILSCALE_NITRO_URL]. Raw
  *   llama-server on `:8080` answers without vault tools, so Ask must not point there.
+ * @property excludedProviderIds providers the user turned off with "Don't use for Ask" on the Providers page,
+ *   keyed by provider id (e.g. `nitro5-qwen`). They show as disabled, are not routed to, and cannot be pinned.
  */
 data class AskSettings(
     val askEnabled: Boolean = true,
-    val nitroEnabled: Boolean = true,
     val nitroBaseUrl: String = DEFAULT_NITRO_URL,
     val askMode: Boolean = false,
-    /** Try TowerX first when its Zenoh agent is alive and its chat proxy /health is OK (llama-server + vault-searchd). */
-    val towerxEnabled: Boolean = true,
     val towerxBaseUrl: String = DEFAULT_TOWERX_URL,
     /** Provider the user pinned in the Providers panel; `null` = auto-pick (see [ProviderRouting]). */
     val pinnedProviderId: String? = null,
     /** Skills asked of the provider: `vault` (default), `code`, or both. */
     val skills: Set<String> = setOf(Skills.VAULT),
+    val excludedProviderIds: Set<String> = emptySet(),
 ) {
     /** The search bar is in Ask mode only when Ask is enabled and the switch is on Ask. */
     val askActive: Boolean get() = askEnabled && askMode
 
-    /** Where an Ask is sent first, for the remote/local badge next to the switch. */
-    val target: AskTarget get() = if (nitroEnabled || towerxEnabled) AskTarget.Remote else AskTarget.Local
+    /**
+     * Where an Ask is sent first, for the remote/local badge next to the switch. Local only when both of today's
+     * Settings chat providers are in [excludedProviderIds]; routing itself is unchanged.
+     */
+    val target: AskTarget get() {
+        val known = setOf(ProviderRouting.NITRO_PROVIDER_ID, ProviderRouting.TOWERX_PROVIDER_ID)
+        return if (known.any { it !in excludedProviderIds }) AskTarget.Remote else AskTarget.Local
+    }
+
+    /** Add or remove [id] from the excluded set; a pinned provider that is excluded is unpinned. */
+    fun exclude(id: String, exclude: Boolean): AskSettings {
+        val next = if (exclude) excludedProviderIds + id else excludedProviderIds - id
+        return copy(excludedProviderIds = next, pinnedProviderId = if (pinnedProviderId in next) null else pinnedProviderId)
+    }
 
     companion object {
         /** Chat proxy on the home LAN (llama-server itself stays on 8080 behind it). */
@@ -55,6 +66,22 @@ data class AskSettings(
         /** Stored `code,vault` → set; blank or unknown values fall back to vault only. */
         fun parseSkills(raw: String?): Set<String> =
             raw.orEmpty().split(',').map { it.trim() }.filter { it == Skills.VAULT || it == Skills.CODE }.toSet().ifEmpty { setOf(Skills.VAULT) }
+
+        fun parseIds(raw: String?): Set<String> =
+            raw.orEmpty().split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
+
+        fun encodeIds(ids: Set<String>): String = ids.sorted().joinToString(",")
+
+        /**
+         * One-time migration of the old Settings "Use Nitro/TowerX for Ask" flags. [stored] is the raw
+         * `excluded_providers` preference: `null` means it has not been written yet, so a `false` flag becomes the
+         * matching Settings provider id (`nitro5-qwen` / `towerx-qwen`). A present value (even blank) is kept as is.
+         */
+        fun migrateExcluded(stored: String?, nitroEnabled: Boolean = true, towerxEnabled: Boolean = true): Set<String> =
+            if (stored != null) parseIds(stored) else buildSet {
+                if (!nitroEnabled) add(ProviderRouting.NITRO_PROVIDER_ID)
+                if (!towerxEnabled) add(ProviderRouting.TOWERX_PROVIDER_ID)
+            }
 
         /** Trims, adds `http://` when no scheme is typed, drops trailing slashes and a trailing `/v1`. */
         fun normalizeBaseUrl(raw: String): String {
@@ -84,29 +111,47 @@ class AskSettingsStore(context: Context) {
     private val flow = MutableStateFlow(load())
     val state: StateFlow<AskSettings> = flow
 
-    private fun load() = AskSettings(
-        askEnabled = prefs.getBoolean(KEY_ASK, true),
-        nitroEnabled = prefs.getBoolean(KEY_NITRO, true),
-        nitroBaseUrl = AskSettings.migrateStoredUrl(prefs.getString(KEY_URL, null)),
-        askMode = prefs.getBoolean(KEY_MODE, false),
-        towerxEnabled = prefs.getBoolean(KEY_TOWERX, true),
-        towerxBaseUrl = prefs.getString(KEY_TOWERX_URL, null) ?: AskSettings.DEFAULT_TOWERX_URL,
-        pinnedProviderId = prefs.getString(KEY_PIN, null)?.takeIf { it.isNotBlank() },
-        skills = AskSettings.parseSkills(prefs.getString(KEY_SKILLS, null)),
-    )
+    private fun load(): AskSettings {
+        val first = !prefs.contains(KEY_EXCLUDED)
+        val excluded = AskSettings.migrateExcluded(
+            if (first) null else prefs.getString(KEY_EXCLUDED, ""),
+            prefs.getBoolean(KEY_NITRO, true),
+            prefs.getBoolean(KEY_TOWERX, true),
+        )
+        if (first) {
+            // Write the new key once so a later load does not remigrate; clear the old flags so a wiped key is a no-op.
+            prefs.edit()
+                .putString(KEY_EXCLUDED, AskSettings.encodeIds(excluded))
+                .putBoolean(KEY_NITRO, true)
+                .putBoolean(KEY_TOWERX, true)
+                .apply()
+        }
+        val pin = prefs.getString(KEY_PIN, null)?.takeIf { it.isNotBlank() }?.takeUnless { it in excluded }
+        return AskSettings(
+            askEnabled = prefs.getBoolean(KEY_ASK, true),
+            nitroBaseUrl = AskSettings.migrateStoredUrl(prefs.getString(KEY_URL, null)),
+            askMode = prefs.getBoolean(KEY_MODE, false),
+            towerxBaseUrl = prefs.getString(KEY_TOWERX_URL, null) ?: AskSettings.DEFAULT_TOWERX_URL,
+            pinnedProviderId = pin,
+            skills = AskSettings.parseSkills(prefs.getString(KEY_SKILLS, null)),
+            excludedProviderIds = excluded,
+        )
+    }
 
     fun update(transform: (AskSettings) -> AskSettings) {
-        val next = transform(flow.value).let { it.copy(nitroBaseUrl = AskSettings.normalizeBaseUrl(it.nitroBaseUrl)) }
+        val next = transform(flow.value).let {
+            val pin = it.pinnedProviderId?.takeUnless { id -> id in it.excludedProviderIds }
+            it.copy(nitroBaseUrl = AskSettings.normalizeBaseUrl(it.nitroBaseUrl), pinnedProviderId = pin)
+        }
         prefs.edit()
             .putBoolean(KEY_ASK, next.askEnabled)
-            .putBoolean(KEY_NITRO, next.nitroEnabled)
             .putString(KEY_URL, next.nitroBaseUrl)
             .remove(KEY_GROUND) // retired: Ask no longer sends local hits to Nitro
             .putBoolean(KEY_MODE, next.askMode)
-            .putBoolean(KEY_TOWERX, next.towerxEnabled)
             .putString(KEY_TOWERX_URL, next.towerxBaseUrl)
             .putString(KEY_PIN, next.pinnedProviderId)
             .putString(KEY_SKILLS, next.skills.sorted().joinToString(","))
+            .putString(KEY_EXCLUDED, AskSettings.encodeIds(next.excludedProviderIds))
             .apply()
         flow.value = next
     }
@@ -121,5 +166,6 @@ class AskSettingsStore(context: Context) {
         const val KEY_TOWERX_URL = "towerx_base_url"
         const val KEY_PIN = "pinned_provider"
         const val KEY_SKILLS = "ask_skills"
+        const val KEY_EXCLUDED = "excluded_providers"
     }
 }

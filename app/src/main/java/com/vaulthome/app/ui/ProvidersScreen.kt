@@ -15,6 +15,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -93,21 +94,31 @@ fun ProvidersScreen(onBack: () -> Unit) {
             val usable = a.routable
             val pinned = ask.pinnedProviderId == p.id
             val ink = if (usable) Ink else Muted.copy(alpha = 0.55f)
-            Row(
-                Modifier.fillMaxWidth().let { if (usable) it.selectable(selected = pinned, onClick = { store.update { s -> s.copy(pinnedProviderId = p.id) } }) else it },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RadioButton(selected = pinned, onClick = null, enabled = usable)
-                Column(Modifier.padding(start = 8.dp)) {
-                    Text("${p.title} · ${p.hostLabel}", color = ink)
-                    val detail = buildList {
-                        add(a.label)
-                        if (pinned && !usable) add("pinned, skipped while ${a.label}")
-                        add("skills ${p.skills.joinToString("/")}")
-                        p.nCtx?.let { add("n_ctx $it") }
-                        health[p.device]?.takeIf { !it.ok }?.let { add(it.detail.take(80)) }
-                    }.joinToString(" · ")
-                    Text(detail, color = if (a == Availability.Available) Green else Muted.copy(alpha = if (usable) 1f else 0.55f), style = MaterialTheme.typography.bodySmall)
+            Column {
+                Row(
+                    Modifier.fillMaxWidth().let { if (usable) it.selectable(selected = pinned, onClick = { store.update { s -> s.copy(pinnedProviderId = p.id) } }) else it },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = pinned, onClick = null, enabled = usable)
+                    Column(Modifier.padding(start = 8.dp)) {
+                        Text("${p.title} · ${p.hostLabel}", color = ink)
+                        val detail = buildList {
+                            add(a.label)
+                            if (pinned && !usable) add("pinned, skipped while ${a.label}")
+                            add("skills ${p.skills.joinToString("/")}")
+                            p.nCtx?.let { add("n_ctx $it") }
+                            health[p.device]?.takeIf { !it.ok }?.let { add(it.detail.take(80)) }
+                        }.joinToString(" · ")
+                        Text(detail, color = if (a == Availability.Available) Green else Muted.copy(alpha = if (usable) 1f else 0.55f), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                // Outside the selectable row so toggling it does not also pin the provider.
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 40.dp)) {
+                    Switch(
+                        checked = p.id in ask.excludedProviderIds,
+                        onCheckedChange = { off -> store.update { it.exclude(p.id, off) } },
+                    )
+                    Text("Don't use for Ask", color = Ink, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 8.dp))
                 }
             }
         }
@@ -131,7 +142,7 @@ fun ProvidersScreen(onBack: () -> Unit) {
             OutlinedButton(onClick = { store.update { it.copy(skills = setOf(Skills.VAULT)) } }) { Text("Use Vault only") }
         }
         ps.errors.forEach { (d, e) -> Text("$d caps: $e", color = Muted, style = MaterialTheme.typography.bodySmall) }
-        Text("URLs and on/off switches per host stay in Settings.", color = Muted, style = MaterialTheme.typography.bodySmall)
+        Text("Chat proxy URLs stay in Settings.", color = Muted, style = MaterialTheme.typography.bodySmall)
         OutlinedButton(onClick = { com.vaulthome.app.devices.DevicesNav.show() }) { Text("Devices: status and power") }
     }
 }

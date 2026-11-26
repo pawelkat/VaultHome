@@ -116,9 +116,26 @@ class ProvidersTest {
     }
 
     @Test fun settingsSwitchMeansDisabledAndBeatsEverything() {
-        val a = avail(settings = AskSettings(towerxEnabled = false), sample = { HealthSample(true, "up", 0) })
+        val a = avail(settings = AskSettings(excludedProviderIds = setOf("towerx-qwen")), sample = { HealthSample(true, "up", 0) })
         assertEquals(Availability.Disabled, a(legacy("towerx")))
         assertEquals(Availability.Available, a(legacy("nitro5")))
+    }
+
+    @Test fun exclusionIsKeyedByProviderIdNotDevice() {
+        val other = chat("nitro5", "nitro5-code", skills = listOf("vault", "code"))
+        val a = avail(settings = AskSettings(excludedProviderIds = setOf("nitro5-qwen")), sample = { HealthSample(true, "up", 0) })
+        assertEquals(Availability.Disabled, a(legacy("nitro5")))
+        assertEquals(Availability.Available, a(other))
+    }
+
+    @Test fun excludedProviderIsNotRoutedAndCannotStayPinned() {
+        val all = listOf(chat("nitro5", "nitro5-qwen"), chat("towerx", "towerx-qwen"))
+        val settings = AskSettings(pinnedProviderId = "towerx-qwen").exclude("towerx-qwen", true)
+        assertEquals(null, settings.pinnedProviderId)
+        val r = ProviderRouting.route(all, "towerx-qwen", availability = avail(settings = settings))
+        assertEquals(listOf("nitro5-qwen"), r.order.map { it.id })
+        assertEquals("disabled", r.skipped.single().reason)
+        assertFalse(Availability.Disabled.routable)
     }
 
     @Test fun manifestOverridesProbes() {
@@ -145,7 +162,7 @@ class ProvidersTest {
         val all = listOf(chat("nitro5", "n"), chat("towerx", "t"), chat("lap", "l", skills = listOf("code")))
         val r = ProviderRouting.route(
             all, "t",
-            availability = avail(settings = AskSettings(nitroEnabled = false), alive = { if (it == "towerx") false else null }),
+            availability = avail(settings = AskSettings(excludedProviderIds = setOf("n")), alive = { if (it == "towerx") false else null }),
         )
         assertEquals(emptyList<String>(), r.order.filter { it.id != "l" }.map { it.id })
         assertEquals(mapOf("n" to "disabled", "t" to "offline", "l" to "no vault skill"), r.skipped.associate { it.provider.id to it.reason })
