@@ -33,8 +33,15 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vaulthome.app.events.EventSyncService
 import com.vaulthome.app.events.EventSyncSettings
+import com.vaulthome.app.events.RouterProbe
+import com.vaulthome.app.events.RouterListStatus
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.async
+import androidx.compose.runtime.LaunchedEffect
 import com.vaulthome.app.events.label
-import com.vaulthome.events.EngineStatus
 import com.vaulthome.events.LinkMode
 
 private val Hint = Color(0xFF8A8A8A)
@@ -100,16 +107,38 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit, onRequestNotifications: () -
     Text("Zenoh router list", color = Ink)
     Text(
         "Routers this phone dials, in order. Add one per row or paste several separated by comma, space or a new line " +
-            "(tcp/host:7447 — also udp, tls, quic). Duplicates are dropped. Zenoh tries the next one if a host is down. " +
-            "This list is used first; if “Use shared endpoint list” is on, dialable routers and other devices from " +
+            "(tcp/host:7447 — also udp, tls, quic). Duplicates are dropped. In Client mode Zenoh links to one router " +
+            "at a time (usually the first in this list that answers); the others are failover if that host is down, " +
+            "not simultaneous sessions. A TCP probe of port 7447 is shown on each row so you can see which hosts are " +
+            "listening. This list is used first; if “Use shared endpoint list” is on, dialable routers and other devices from " +
             "app_settings/VaultEvents/endpoints.json are added after it (they do not replace what you type). " +
             "The Grok Bot box is outbound-only and is never dialed. The chat-proxy tailnet suffix is taken from the first " +
             "*.ts.net entry here.",
         color = Hint, style = MaterialTheme.typography.bodySmall,
     )
     val routers = EventSyncSettings.parseList(connect)
+    var reach by remember { mutableStateOf<Map<String, RouterListStatus.Reach>>(emptyMap()) }
+    LaunchedEffect(routers) {
+        reach = routers.associateWith { RouterListStatus.Reach.CHECKING }
+        while (true) {
+            val next = coroutineScope {
+                routers.map { ep ->
+                    async(Dispatchers.IO) {
+                        ep to if (RouterProbe.tcpOpen(ep)) RouterListStatus.Reach.REACHABLE else RouterListStatus.Reach.UNREACHABLE
+                    }
+                }.awaitAll().toMap()
+            }
+            reach = next
+            delay(RouterProbe.INTERVAL_MS)
+        }
+    }
     routers.forEachIndexed { i, ep ->
         val err = EventSyncSettings.endpointProblem(ep)
+        val host = RouterListStatus.parse(ep)?.host
+        val label = buildString {
+            append("Router ${i + 1}")
+            if (host != null) append(" · ").append(RouterListStatus.shortName(host))
+        }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = ep,
@@ -118,15 +147,25 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit, onRequestNotifications: () -
                     val next = routers.take(i) + parts + routers.drop(i + 1)
                     connect = EventSyncSettings.encodeList(next.distinct())
                 },
-                label = { Text("Router ${i + 1}", color = Muted) },
+                label = { Text(label, color = Muted) },
                 isError = err != null,
+                supportingText = {
+                    if (err != null) Text(err, color = MaterialTheme.colorScheme.error)
+                    else Text(
+                        RouterListStatus.rowLabel(reach[ep]),
+                        color = when (reach[ep]) {
+                            RouterListStatus.Reach.REACHABLE -> Color(0xFF2E7D32)
+                            RouterListStatus.Reach.UNREACHABLE -> MaterialTheme.colorScheme.error
+                            else -> Hint
+                        },
+                    )
+                },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
             )
             TextButton(onClick = { connect = EventSyncSettings.encodeList(routers.filterIndexed { j, _ -> j != i }) }) { Text("Remove") }
         }
-        if (err != null) Text(err, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
     }
     val addProblem = add.trim().takeIf { it.isNotEmpty() }?.let { raw ->
         EventSyncSettings.parseList(raw).mapNotNull { EventSyncSettings.endpointProblem(it) }.firstOrNull()
@@ -224,7 +263,7 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit, onRequestNotifications: () -
             useShared = true
         }) { Text("Defaults") }
     }
-    Text(statusLine(settings.enabled, svc), color = Ink, style = MaterialTheme.typography.bodySmall)
+    Text(RouterListStatus.statusLine(settings.enabled, svc, draft.connect), color = Ink, style = MaterialTheme.typography.bodySmall)
     svc.status.lastEvent?.let { ev ->
         val at = svc.status.lastEventAtMs?.let { java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(it)) }
         Text("Last event: $ev${at?.let { " at $it" } ?: ""}", color = Hint, style = MaterialTheme.typography.bodySmall)
@@ -251,21 +290,8 @@ private fun Column2(title: String, hint: String, modifier: Modifier = Modifier) 
 }
 
 private fun modeHint(m: LinkMode) = when (m) {
-    LinkMode.CLIENT -> "Connect to a router (note4 or the box hub). Recommended."
+    LinkMode.CLIENT -> "Link to one router at a time (the first in the list that answers). Recommended. Peer mode can keep more than one link open; that is a larger change and is not switched on here."
     LinkMode.PEER -> "Connect directly to the endpoints and accept peers on the listen endpoint."
     LinkMode.ROUTER -> "This phone is the router other devices connect to."
 }
 
-private fun statusLine(enabled: Boolean, s: com.vaulthome.app.events.EventSyncState): String {
-    if (!enabled) return "Status: off"
-    if (!s.running) return "Status: not running"
-    val st = s.status
-    val phase = when (st.phase) {
-        EngineStatus.Phase.CONNECTED -> "connected"
-        EngineStatus.Phase.CONNECTING -> "connecting"
-        EngineStatus.Phase.ERROR -> "error"
-        EngineStatus.Phase.STOPPED -> "stopped"
-    }
-    return "Status: $phase (${s.endpoint ?: ""}) · ${st.routers} routers · ${st.peers} peers · ${st.tracked} notes tracked · " +
-        "${st.published} sent · ${st.applied} applied · ${st.conflicts} conflicts"
-}

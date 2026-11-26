@@ -179,15 +179,8 @@ class EventSyncService : Service() {
         e.start()
     }
 
-    private fun summary(s: EventSyncSettings, st: EngineStatus): String {
-        val links = "${st.routers} router${if (st.routers == 1) "" else "s"}, ${st.peers} peer${if (st.peers == 1) "" else "s"}"
-        return when (st.phase) {
-            EngineStatus.Phase.CONNECTED -> "${s.mode.label} · $links · ${st.tracked} notes"
-            EngineStatus.Phase.CONNECTING -> "${s.mode.label} · connecting…"
-            EngineStatus.Phase.ERROR -> "${s.mode.label} · error"
-            EngineStatus.Phase.STOPPED -> "stopped"
-        }
-    }
+    private fun summary(s: EventSyncSettings, st: EngineStatus): String =
+        RouterListStatus.notificationSummary(s.mode, st)
 
     private fun notifyStatus(s: EventSyncSettings, st: EngineStatus) {
         val text = summary(s, st)
