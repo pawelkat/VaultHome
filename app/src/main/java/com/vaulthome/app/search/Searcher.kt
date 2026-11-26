@@ -17,7 +17,7 @@ class Searcher(
     private val dao: ChunkDao,
     private val embedder: Embedder,
 ) {
-    suspend fun search(typed: String): List<SearchHit> {
+    suspend fun search(typed: String, limit: Int = SearchConfig.TOP_K): List<SearchHit> {
         val query = typed.trim()
         if (query.isEmpty()) return emptyList()
         val vector = embedder.embed(Prefixes.query(query))
@@ -31,7 +31,7 @@ class Searcher(
                 )
             }
             .sortedByDescending { it.score }
-            .take(SearchConfig.TOP_K)
+            .take(limit)
     }
 
     private fun snippet(text: String): String {

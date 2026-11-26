@@ -14,6 +14,7 @@ kotlin {
 }
 
 android {
+    testOptions { unitTests { isIncludeAndroidResources = true } }
     namespace = "com.vaulthome.app"
     compileSdk = 35
 
@@ -80,4 +81,9 @@ dependencies {
     implementation(libs.litertlm.android)
 
     testImplementation(libs.junit)
+    // Compose UI on the JVM (Robolectric): RenderedNoteTest composes sample notes.
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation("androidx.compose.ui:ui-test-junit4")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
