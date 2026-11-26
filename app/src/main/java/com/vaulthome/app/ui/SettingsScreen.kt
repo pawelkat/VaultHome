@@ -27,12 +27,22 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 
 @Composable
 fun SettingsScreen(
     viewModel: VaultHomeViewModel,
     onPickVault: () -> Unit,
     onBack: () -> Unit,
+    askViewModel: com.vaulthome.app.ask.AskViewModel? = null,
 ) {
     BackHandler(onBack = onBack)
     val home by viewModel.home.collectAsStateWithLifecycle()
@@ -45,15 +55,18 @@ fun SettingsScreen(
         modifier = Modifier
             .fillMaxSize()
             .systemBarsPadding()
-            .padding(16.dp),
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Settings", style = MaterialTheme.typography.titleLarge)
-        OutlinedButton(onClick = onBack) { Text("Back") }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            BackArrow(onBack)
+            Text("Settings", style = MaterialTheme.typography.titleLarge, color = Ink, modifier = Modifier.padding(start = 4.dp))
+        }
         if (busy) {
             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
-        Text("Vault", style = MaterialTheme.typography.titleMedium)
+        Text("Vault", style = MaterialTheme.typography.titleMedium, color = Ink)
         Text(
             text = if (home.vaultGranted) "Read access is granted" else "The vault is not granted",
             color = Color(0xFF8A8A8A),
@@ -63,7 +76,7 @@ fun SettingsScreen(
         } else {
             Button(onClick = onPickVault) { Text("Grant vault") }
         }
-        Text("Open YouTube links with", style = MaterialTheme.typography.titleMedium)
+        Text("Open YouTube links with", style = MaterialTheme.typography.titleMedium, color = Ink)
         val ctx = LocalContext.current
         var yt by remember { mutableStateOf(LinkOpener.youTubeApp(ctx)) }
         YouTubeApp.entries.forEach { opt ->
@@ -72,14 +85,66 @@ fun SettingsScreen(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RadioButton(selected = yt == opt, onClick = null)
-                Text(opt.label, modifier = Modifier.padding(start = 8.dp))
+                Text(opt.label, color = Ink, modifier = Modifier.padding(start = 8.dp))
             }
         }
-        Text("Model", style = MaterialTheme.typography.titleMedium)
+        Text("Model", style = MaterialTheme.typography.titleMedium, color = Ink)
         if (!home.modelReady) {
             Button(onClick = viewModel::downloadModel) { Text("Download model") }
         } else {
             Text("Model is in app storage", color = Color(0xFF8A8A8A))
         }
+        if (askViewModel != null) AskSettingsSection(askViewModel)
+    }
+}
+
+@Composable
+private fun AskSettingsSection(askViewModel: com.vaulthome.app.ask.AskViewModel) {
+    val ctx = LocalContext.current
+    val store = (ctx.applicationContext as com.vaulthome.app.VaultHomeApp).graph.askSettings
+    val ask by store.state.collectAsStateWithLifecycle()
+    val health by askViewModel.healthText.collectAsStateWithLifecycle()
+    var url by remember { mutableStateOf(ask.nitroBaseUrl) }
+    Text("Ask", style = MaterialTheme.typography.titleMedium, color = Ink)
+    SwitchRow("Show Ask ↔ Search switch", ask.askEnabled) { v -> store.update { it.copy(askEnabled = v) } }
+    SwitchRow("Use Nitro first", ask.nitroEnabled) { v -> store.update { it.copy(nitroEnabled = v) } }
+    OutlinedTextField(
+        value = url,
+        onValueChange = { url = it },
+        label = { Text("Nitro chat proxy URL", color = Muted) },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { store.update { it.copy(nitroBaseUrl = url) }; url = store.state.value.nitroBaseUrl }),
+    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { store.update { it.copy(nitroBaseUrl = url) }; url = store.state.value.nitroBaseUrl }) { Text("Save URL") }
+        OutlinedButton(onClick = {
+            store.update { it.copy(nitroBaseUrl = url) }; url = store.state.value.nitroBaseUrl; askViewModel.testNitro()
+        }) { Text("Test /health") }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        TextButton(onClick = { url = com.vaulthome.app.ask.AskSettings.DEFAULT_NITRO_URL; store.update { it.copy(nitroBaseUrl = url) } }) { Text("Home Wi‑Fi") }
+        TextButton(onClick = { url = com.vaulthome.app.ask.AskSettings.TAILSCALE_NITRO_URL; store.update { it.copy(nitroBaseUrl = url) } }) { Text("Tailscale") }
+    }
+    Text(
+        "Ask must use Nitro's chat proxy (adds the Nitro5 Qwen system prompt and runs vault_search), " +
+            "not raw llama-server. Home Wi‑Fi: http://192.168.1.18:8082. Tailscale: https://nitro5.tailf52603.ts.net. " +
+            "Raw :8080 answers without vault tools — avoid it for Ask. The Wi‑Fi URL needs the proxy listening on the LAN " +
+            "(BIND=0.0.0.0); the shipped service binds 127.0.0.1, which only Tailscale Serve reaches.",
+        color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
+    )
+    health?.let { Text(it, color = Color(0xFF8A8A8A)) }
+    Text(
+        "Plain http works only to 192.168.1.18 and localhost; Tailscale uses HTTPS. No API key is stored. On-device answers (Gemma 4 E2B) come in a later build; until then Ask falls back to matching notes.",
+        color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
+    )
+}
+
+@Composable
+private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, color = Ink, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }
