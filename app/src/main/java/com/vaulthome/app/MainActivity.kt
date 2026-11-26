@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vaulthome.app.ui.HomeScreen
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vaulthome.app.ui.SettingsScreen
 import com.vaulthome.app.ui.VaultHomeTheme
 import com.vaulthome.app.ui.VaultHomeViewModel
@@ -69,6 +70,7 @@ class MainActivity : ComponentActivity() {
             val requested = openNote.value
             androidx.compose.runtime.LaunchedEffect(requested) { if (requested != null) showSettings = false }
             val askViewModel: com.vaulthome.app.ask.AskViewModel = viewModel()
+            val showProviders by com.vaulthome.app.ask.ProvidersNav.open.collectAsStateWithLifecycle()
             val pickVaultTree = {
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                     addFlags(
@@ -109,6 +111,7 @@ class MainActivity : ComponentActivity() {
                 // Home stays in a saveable slot so its note back stack & scroll survive Settings.
                 val holder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
                 when {
+                    showProviders -> com.vaulthome.app.ui.ProvidersScreen(onBack = { com.vaulthome.app.ask.ProvidersNav.hide() })
                     showSettings -> SettingsScreen(
                         viewModel = viewModel,
                         onPickVault = pickVaultTree,

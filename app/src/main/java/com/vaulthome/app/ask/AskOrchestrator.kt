@@ -26,8 +26,10 @@ sealed interface AskOutcome {
         val model: String?,
         override val citations: List<Citation>,
         override val searchError: String?,
-        /** Which chat proxy answered: `TowerX` or `Nitro`. */
+        /** Which chat proxy answered (device label, e.g. `TowerX` or `Nitro`). */
         val host: String = "Nitro",
+        /** Set when the request could not be sized from a manifest (e.g. `n_ctx unknown: using 1024 tokens`). */
+        val sizingNote: String? = null,
     ) : AskOutcome
 
     /** PR-B: answer from the on-device generator. */
@@ -50,9 +52,10 @@ sealed interface AskOutcome {
 }
 
 /**
- * Ask flow: Nitro first (short `/health`, then `/v1/chat/completions`), local EmbeddingGemma search in
- * parallel for citations; on any Nitro failure fall through to [local] and finally to search-only.
- * Never throws for network trouble; only cancellation propagates.
+ * Ask flow: the chat providers chosen by [ProviderRouting] (pinned, else the auto-pick rule, then any other ready one;
+ * no host is hardcoded first) are tried in turn with a short `/health`, then `/v1/chat/completions` sized from the
+ * provider's manifest. Local EmbeddingGemma search runs in parallel for citations; when no provider answers it falls
+ * through to [local] and finally to search-only. Never throws for network trouble; only cancellation propagates.
  */
 class AskOrchestrator(
     private val nitro: NitroGateway,
@@ -60,76 +63,70 @@ class AskOrchestrator(
     private val search: suspend (String) -> List<SearchHit>,
     private val local: AnswerEngine = LocalAnswerEngineStub,
     private val maxCitations: Int = com.vaulthome.app.index.SearchConfig.ASK_TOP_K,
-    /** TowerX agent token `vault/presence/towerx`: true/false over Zenoh, `null` = no Zenoh session. */
-    private val towerxAgentAlive: () -> Boolean? = { null },
-    /** Reports each TowerX /health result (for the Settings indicator). */
-    private val onTowerXHealth: (Boolean, String) -> Unit = { _, _ -> },
+    /** Providers from caps manifests (`device -> providers`); devices without one use the Settings URLs. */
+    private val manifests: () -> Map<String, List<Provider>> = { emptyMap() },
+    /** Zenoh presence token `vault/presence/<device>`: true/false, `null` = unknown or no Zenoh session. */
+    private val deviceAlive: (String) -> Boolean? = { null },
+    /** Last `/health` per device (temporary S24 availability source). */
+    private val healthSample: (String) -> HealthSample? = { null },
+    private val now: () -> Long = System::currentTimeMillis,
+    /** Reports each `/health` result per device (for the Settings indicators). */
+    private val onHealth: (String, Boolean, String) -> Unit = { _, _, _ -> },
 ) {
+    /** The providers [ask] would try right now, in order (also used by the badge and the Providers panel). */
+    fun routing(): Routing {
+        val s = settings()
+        val sources = ProviderAvailability.chain(s, deviceAlive, healthSample, now)
+        return ProviderRouting.route(ProviderRouting.all(manifests(), s), s.pinnedProviderId, s.skills) { ProviderAvailability.of(it, s.skills, sources) }
+    }
+
     suspend fun ask(question: String, onPhase: (AskPhase) -> Unit = {}): AskOutcome = coroutineScope {
         val q = question.trim()
         require(q.isNotEmpty()) { "Empty question" }
         val config = settings()
         val hitsJob = async { runSearch(q) }
+        val routing = routing()
 
-        // TowerX first when its agent is not known offline and its proxy (llama-server + vault-searchd) is healthy.
-        var towerxNote = ""
-        if (config.towerxEnabled && towerxAgentAlive() != false) {
+        // Earlier providers that failed: "Label: reason; ", kept in front of the last reason.
+        var notes = ""
+        var skip = NitroSkip.Disabled
+        // Hosts switched off in Settings are the user's choice, not news; the others say why they were left out.
+        routing.skipped.filter { it.reason != Availability.Disabled.label }.forEach { notes += "${it.provider.hostLabel}: ${it.reason}; " }
+        var detail = if (notes.isEmpty()) "No chat provider is enabled in Settings" else ""
+        for ((index, p) in routing.order.withIndex()) {
             onPhase(AskPhase.CheckingNitro)
-            val h = nitro.health(config.towerxBaseUrl)
-            onTowerXHealth(h == Health.Ok, describe(h))
-            if (h == Health.Ok) {
-                onPhase(AskPhase.AskingNitro)
-                try {
-                    val reply = nitro.chat(config.towerxBaseUrl, NitroPrompt.messages(q))
-                    hitsJob.cancel()
-                    return@coroutineScope AskOutcome.Nitro(reply.content, reply.model, emptyList(), null, host = "TowerX")
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    towerxNote = "TowerX: ${e.message ?: "chat failed"}; "
-                }
-            } else {
-                towerxNote = "TowerX: ${describe(h)}; "
-            }
-        } else if (config.towerxEnabled) {
-            towerxNote = "TowerX offline in Zenoh; "
-        }
-
-        var skip: NitroSkip
-        var detail: String
-        if (!config.nitroEnabled) {
-            skip = NitroSkip.Disabled
-            detail = "Nitro is off in Settings"
-        } else {
-            onPhase(AskPhase.CheckingNitro)
+            var health = nitro.health(p.baseUrl)
             // Over Tailscale the first packet often has to wake the path (DERP/peer setup), so one slow /health
             // must not end the ask: retry once, and treat a health *timeout* as "unknown" and try chat anyway.
-            var health = nitro.health(config.nitroBaseUrl)
             if (health is Health.Down && health.reason.contains("timed out")) {
-                health = nitro.health(config.nitroBaseUrl)
+                health = nitro.health(p.baseUrl)
                 if (health is Health.Down && health.reason.contains("timed out")) health = Health.Ok
             }
+            onHealth(p.device, health == Health.Ok, describe(health))
+            var failure: String
             when (health) {
                 Health.Ok -> {
                     onPhase(AskPhase.AskingNitro)
                     try {
-                        val reply = nitro.chat(config.nitroBaseUrl, NitroPrompt.messages(q))
-                        // Nitro's answer cites its own sources; the on-device search was only a fallback.
+                        val (options, sizing) = ProviderRouting.options(p, config.skills)
+                        val reply = nitro.chat(p.baseUrl, NitroPrompt.messages(q), options)
+                        // The provider's answer cites its own sources; the on-device search was only a fallback.
                         hitsJob.cancel()
-                        return@coroutineScope AskOutcome.Nitro(reply.content, reply.model, emptyList(), null)
+                        return@coroutineScope AskOutcome.Nitro(reply.content, reply.model, emptyList(), null, host = p.hostLabel, sizingNote = sizing)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
                         skip = NitroSkip.ChatFailed
-                        detail = e.message ?: "Nitro chat failed"
+                        failure = e.message ?: "chat failed"
                     }
                 }
-                is Health.Loading -> { skip = NitroSkip.Loading; detail = health.detail }
-                is Health.Down -> { skip = NitroSkip.Down; detail = health.reason }
+                is Health.Loading -> { skip = NitroSkip.Loading; failure = health.detail }
+                is Health.Down -> { skip = NitroSkip.Down; failure = health.reason }
             }
+            if (index < routing.order.lastIndex) notes += "${p.hostLabel}: $failure; " else detail = failure
         }
-
-        detail = towerxNote + detail
+        if (routing.order.isNotEmpty() && detail.isEmpty()) detail = "no answer"
+        detail = (notes + detail).trim().trimEnd(';').trim()
         onPhase(AskPhase.Searching)
         val hits = hitsJob.await()
         if (hits.error == null && local.isReady()) {

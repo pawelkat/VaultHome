@@ -49,8 +49,22 @@ class AppGraph(app: Application) {
         status = status,
         tags = tags,
     )
+    /**
+     * Primary index trigger: the vault-events sync applied notes (note events under vault/notes, live or catch-up) ->
+     * re-embed just those paths, debounced. A full incremental pass runs once per Zenoh session after catch-up.
+     */
+    val eventReindexer = com.vaulthome.app.index.EventReindexer(
+        scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default),
+    ) { plan ->
+        when (plan) {
+            is com.vaulthome.app.index.ReindexPlan.Paths -> indexer.indexPaths(plan.paths)
+            com.vaulthome.app.index.ReindexPlan.Full ->
+                if (!store.hasReadAccess() || !models.isReady()) false else { indexer.indexAll(); true }
+        }
+    }
     val searcher = Searcher(database.chunks(), embedder)
     val askSettings = com.vaulthome.app.ask.AskSettingsStore(app)
+    val queryHistory = com.vaulthome.app.search.QueryHistoryStore(app, com.vaulthome.app.events.SafHistoryFile(app, store))
     val nitro = com.vaulthome.app.ask.NitroClient()
     val x4Settings = com.vaulthome.app.x4.X4SettingsStore(app)
     val eventSync = com.vaulthome.app.events.EventSyncSettingsStore(app)
@@ -64,7 +78,12 @@ class AppGraph(app: Application) {
         },
         // PR-B: replace with the Gemma 4 E2B LiteRT-LM engine.
         local = com.vaulthome.app.ask.LocalAnswerEngineStub,
-        towerxAgentAlive = { com.vaulthome.app.towerx.TowerXMonitor.state.value.agentAlive },
-        onTowerXHealth = { ok, detail -> com.vaulthome.app.towerx.TowerXMonitor.onHealth(ok, detail) },
+        manifests = { com.vaulthome.app.ask.ProviderMonitor.state.value.manifests },
+        deviceAlive = { com.vaulthome.app.ask.ProviderMonitor.alive(it) },
+        healthSample = { com.vaulthome.app.ask.ProviderHealth.sample(it) },
+        onHealth = { device, ok, detail ->
+            com.vaulthome.app.ask.ProviderHealth.report(device, ok, detail)
+            if (device == com.vaulthome.app.ask.ProviderRouting.TOWERX_DEVICE) com.vaulthome.app.towerx.TowerXMonitor.onHealth(ok, detail)
+        },
     )
 }

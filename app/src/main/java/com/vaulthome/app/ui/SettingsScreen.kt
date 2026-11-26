@@ -114,7 +114,7 @@ private fun AskSettingsSection(askViewModel: com.vaulthome.app.ask.AskViewModel)
     var url by remember { mutableStateOf(ask.nitroBaseUrl) }
     Text("Ask", style = MaterialTheme.typography.titleMedium, color = Ink)
     SwitchRow("Show Ask ↔ Search switch", ask.askEnabled) { v -> store.update { it.copy(askEnabled = v) } }
-    SwitchRow("Use Nitro first", ask.nitroEnabled) { v -> store.update { it.copy(nitroEnabled = v) } }
+    SwitchRow("Use Nitro for Ask", ask.nitroEnabled) { v -> store.update { it.copy(nitroEnabled = v) } }
     OutlinedTextField(
         value = url,
         onValueChange = { url = it },
@@ -202,7 +202,7 @@ private fun TowerXSection() {
             dismissButton = { TextButton(onClick = { confirmOff = false }) { Text("Cancel") } },
         )
     }
-    SwitchRow("Use TowerX first for Ask", ask.towerxEnabled) { v -> store.update { it.copy(towerxEnabled = v) } }
+    SwitchRow("Use TowerX for Ask", ask.towerxEnabled) { v -> store.update { it.copy(towerxEnabled = v) } }
     OutlinedTextField(
         value = url,
         onValueChange = { url = it },

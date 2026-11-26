@@ -19,7 +19,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -33,9 +32,8 @@ import com.vaulthome.app.VaultHomeApp
 import com.vaulthome.app.vault.DailyNotes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.time.LocalDate
 
-/** Landing page: the latest daily note in the note viewer (search overlay on top), or an empty state. */
+/** Landing page: today's Daily/yyyy-MM-dd.md (search overlay on top), or an empty state / most recent past note. */
 @Composable
 fun HomeScreen(
     viewModel: VaultHomeViewModel,
@@ -48,18 +46,29 @@ fun HomeScreen(
 ) {
     val context = LocalContext.current
     val index by viewModel.index.collectAsStateWithLifecycle()
+    val today = DailyNotes.today()
     // Saveable so the first composition after Settings / recreation / process death goes straight to the note.
     var loading by rememberSaveable { mutableStateOf(true) }
     var daily by rememberSaveable { mutableStateOf<String?>(null) }
-    // Re-resolve on launch and whenever an index run finishes (a new daily note may have appeared).
-    LaunchedEffect(index.phase == "ready") {
+    var dailyNotice by rememberSaveable { mutableStateOf<String?>(null) }
+    // Re-resolve on launch, when the local date rolls over, and whenever an index run finishes.
+    // Paths come from the index PLUS a direct look at Daily/ — the index alone can be days stale
+    // (the 2026-11-23 start-page bug: today's Daily/2026-11-26.md was on disk but not indexed yet).
+    LaunchedEffect(today.toString(), index.phase) {
         val graph = (context.applicationContext as VaultHomeApp).graph
-        val found = withContext(Dispatchers.IO) {
-            val indexed = graph.database.chunks().allNotes().map { it.path }
-            val paths = indexed.ifEmpty { runCatching { graph.reader.scan().map { it.relativePath } }.getOrDefault(emptyList()) }
-            DailyNotes.latest(paths, LocalDate.now())
+        val landing = withContext(Dispatchers.IO) {
+            val todayPath = DailyNotes.pathFor(today)
+            val onDisk = buildList {
+                if (graph.reader.findByPath(todayPath) != null) add(todayPath)
+                addAll(runCatching { graph.reader.listFolder(DailyNotes.FOLDER).map { it.relativePath } }.getOrDefault(emptyList()))
+            }
+            val indexed = runCatching { graph.database.chunks().allNotes().map { it.path } }.getOrDefault(emptyList())
+            DailyNotes.landing(indexed + onDisk, today)
         }
-        if (found != null || daily == null) daily = found
+        daily = landing?.path
+        dailyNotice = if (landing != null && !landing.isToday)
+            "Today's note (${DailyNotes.pathFor(today)}) was not found. Showing ${landing.path}."
+        else null
         loading = false
     }
     val actions: @Composable RowScope.() -> Unit = { ReindexAction(viewModel, onIndex) }
@@ -67,9 +76,9 @@ fun HomeScreen(
     var opened by rememberSaveable { mutableStateOf<String?>(null) }
     val path = daily ?: opened
     if (requestedNote != null) {
-        NoteScreen(path = requestedNote, viewModel = viewModel, onBack = onRequestedNoteClosed, actions = actions, topBar = topBar)
+        NoteScreen(path = requestedNote, viewModel = viewModel, onBack = onRequestedNoteClosed, canLeave = true, actions = actions, topBar = topBar)
     } else if (path != null) {
-        NoteScreen(path = path, viewModel = viewModel, onBack = { if (daily == null) opened = null else onExit() }, actions = actions, topBar = topBar)
+        NoteScreen(path = path, viewModel = viewModel, onBack = { if (daily == null) opened = null else onExit() }, canLeave = daily == null, notice = if (daily != null) dailyNotice else null, actions = actions, topBar = topBar)
     } else {
         BackHandler(onBack = onExit)
         SearchScaffold(viewModel = viewModel, onOpen = { opened = it }, actions = actions, topBar = topBar) {
@@ -77,7 +86,7 @@ fun HomeScreen(
             Box(Modifier.fillMaxWidth().padding(top = 48.dp), contentAlignment = Alignment.Center) {
                 Text(
                     if (loading) "Looking for today's daily note…"
-                    else "No daily note (YYYY-MM-DD.md) found.\nPick the vault in Settings and run Index, or search above.",
+                    else "No daily note for $today (${DailyNotes.pathFor(today)}).\nPick the vault in Settings, or search above.",
                     color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodyMedium,
                 )
             }

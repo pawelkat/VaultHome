@@ -32,13 +32,18 @@ sealed class Notice {
 object SyncNotices {
     const val SHARED_PREFIX = "app_settings/VaultEvents/"
 
+    /** Settings files that sync silently: no "Synced notes" notification (shared endpoints, VaultHome's own history). */
+    val SILENT_PREFIXES = listOf(SHARED_PREFIX, "app_settings/VaultHome/")
+
+    fun isSilent(path: String) = SILENT_PREFIXES.any { path.startsWith(it) }
+
     /** Above this many notes in one batch, post a single summary instead. */
     const val MAX_INDIVIDUAL = 3
 
     fun fromIncoming(ev: NoteEvent, applied: Applied, ownDevice: String): List<SyncedNote> {
         if (ev.stamp.origin == ownDevice) return emptyList()
         val out = ArrayList<SyncedNote>(1 + applied.conflicts.size)
-        if (applied.changed && applied.decision is Decision.Apply && !ev.path.startsWith(SHARED_PREFIX)) {
+        if (applied.changed && applied.decision is Decision.Apply && !isSilent(ev.path)) {
             out += SyncedNote(ev.path, ev.stamp.origin, deleted = ev.stamp.deleted)
         }
         for (c in applied.conflicts) out += SyncedNote(c, ev.stamp.origin, conflictCopy = true)

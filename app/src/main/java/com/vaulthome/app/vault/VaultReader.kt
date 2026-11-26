@@ -58,6 +58,46 @@ class VaultReader(
         return readText(file.uri)
     }
 
+
+    /**
+     * One file by relative vault path, looked up on the tree (not the [scan] cache). Used so today's
+     * `Daily/yyyy-MM-dd.md` is found even when the last index run is a few days old.
+     */
+    fun findByPath(relativePath: String): VaultFile? {
+        val parts = relativePath.split('/').filter { it.isNotEmpty() }
+        if (parts.isEmpty()) return null
+        val rootUri = store.treeUri() ?: return null
+        val root = DocumentFile.fromTreeUri(context, rootUri) ?: return null
+        var dir = root
+        for ((i, part) in parts.withIndex()) {
+            val child = dir.findFile(part) ?: return null
+            if (i == parts.lastIndex) return if (child.isFile) VaultFile(relativePath, child.lastModified(), child.uri) else null
+            if (!child.isDirectory) return null
+            dir = child
+        }
+        return null
+    }
+
+    /** Markdown files directly in [folder] (e.g. `Daily`), without walking the rest of the vault. */
+    fun listFolder(folder: String): List<VaultFile> {
+        val rootUri = store.treeUri() ?: return emptyList()
+        val root = DocumentFile.fromTreeUri(context, rootUri) ?: return emptyList()
+        var dir = root
+        if (folder.isNotEmpty()) {
+            for (part in folder.split('/').filter { it.isNotEmpty() }) {
+                dir = dir.findFile(part) ?: return emptyList()
+                if (!dir.isDirectory) return emptyList()
+            }
+        }
+        return dir.listFiles().mapNotNull { child ->
+            val name = child.name ?: return@mapNotNull null
+            if (child.isFile && isMarkdown(name)) {
+                val path = if (folder.isEmpty()) name else "$folder/$name"
+                VaultFile(path, child.lastModified(), child.uri)
+            } else null
+        }
+    }
+
     private fun walk(directory: DocumentFile, prefix: String, out: MutableList<VaultFile>, accept: (String) -> Boolean) {
         for (child in directory.listFiles()) {
             val name = child.name ?: continue

@@ -127,7 +127,12 @@ class EventSyncService : Service() {
                 mutable.value = EventSyncState(running = true, status = st, endpoint = endpoint(st.connect.ifEmpty { link.connect }))
                 notifyStatus(settings, st)
             },
-            onVaultChanged = { g.reader.invalidate() },
+            onVaultChanged = { changed ->
+                g.reader.invalidate()
+                // The sync just applied these notes: embed them now (debounced); another device's history.json is merged in.
+                g.eventReindexer.onVaultChanged(changed)
+                if (com.vaulthome.app.search.QueryHistory.VAULT_PATH in changed) g.queryHistory.sync()
+            },
             log = { Log.i(TAG, it) },
             // Shared endpoint list in the vault: read before each connect, self entry merged after the first catch-up
             // (so the hub's newer copy is applied first and other devices' entries are kept).
@@ -135,6 +140,9 @@ class EventSyncService : Service() {
                 if (!settings.useSharedEndpoints) cfg else settings.linkConfig(SharedEndpoints.parse((fs.read(SharedEndpoints.PATH) as? Disk.Present)?.bytes))
             },
             onConnected = {
+                // Caught up with the hub: one incremental pass picks up anything the live events did not list.
+                g.eventReindexer.requestFull()
+                g.queryHistory.sync()
                 if (settings.useSharedEndpoints) {
                     val disk = fs.read(SharedEndpoints.PATH)
                     if (disk !is Disk.Skipped) {
@@ -151,11 +159,18 @@ class EventSyncService : Service() {
             },
             onNotices = { n -> if (settings.notifySynced) notifier.post(n) },
             // TowerX power board + TowerX agent tokens for Settings and Ask (vault note `Grok Bot - TowerX power`).
-            watchTokens = com.vaulthome.app.towerx.TowerXKeys.WATCH,
-            onToken = com.vaulthome.app.towerx.TowerXMonitor::onToken,
+            // Plus every device's presence token: the Ask providers panel follows joins/leaves and reads `vault/caps/<device>`.
+            watchTokens = com.vaulthome.app.towerx.TowerXKeys.WATCH + com.vaulthome.events.Presence.WILDCARD,
+            onToken = { key, alive ->
+                com.vaulthome.app.towerx.TowerXMonitor.onToken(key, alive)
+                com.vaulthome.app.ask.ProviderMonitor.onToken(key, alive)
+            },
         )
         engine = e
         com.vaulthome.app.towerx.TowerXMonitor.caller = { sel, payload, ms -> e.call(sel, payload, ms) }
+        com.vaulthome.app.ask.ProviderMonitor.selfDevice = settings.device
+        com.vaulthome.app.ask.ProviderMonitor.caller = { sel, payload, ms -> e.call(sel, payload, ms) }
+        com.vaulthome.app.ask.ProviderMonitor.onSessionStarted()
         running = settings
         if (settings.mode == LinkMode.ROUTER) acquireWakeLock() else releaseWakeLock()
         mutable.value = EventSyncState(running = true, status = e.status, endpoint = endpoint(link.connect))
@@ -222,6 +237,8 @@ class EventSyncService : Service() {
     private fun stopEngine() {
         com.vaulthome.app.towerx.TowerXMonitor.caller = null
         com.vaulthome.app.towerx.TowerXMonitor.onSessionClosed()
+        com.vaulthome.app.ask.ProviderMonitor.caller = null
+        com.vaulthome.app.ask.ProviderMonitor.onSessionClosed()
         engine?.stop()
         engine = null
         running = null

@@ -58,12 +58,30 @@ class AskViewModel(app: Application) : AndroidViewModel(app) {
     fun ask() {
         val q = flow.value.question.trim()
         if (q.isEmpty()) return
+        graph.queryHistory.record(q, com.vaulthome.app.search.QueryMode.Ask)
         job?.cancel()
         flow.value = flow.value.copy(phase = AskPhase.CheckingNitro, outcome = null, asked = q, hidden = false, returnTo = null)
         job = viewModelScope.launch {
             val outcome = graph.askOrchestrator.ask(q) { phase -> flow.value = flow.value.copy(phase = phase) }
             flow.value = flow.value.copy(phase = null, outcome = outcome)
         }
+    }
+
+    /**
+     * Re-run or restore a history Ask. If the last cached answer is for [question], it is shown again
+     * (no new request); otherwise [ask] runs.
+     */
+    fun replay(question: String) {
+        val q = question.trim()
+        if (q.isEmpty()) return
+        onQuestionChange(q)
+        val cur = flow.value
+        if (cur.asked == q && cur.outcome != null) {
+            flow.value = cur.copy(question = q, hidden = false, returnTo = null, phase = null)
+            graph.queryHistory.record(q, com.vaulthome.app.search.QueryMode.Ask)
+            return
+        }
+        ask()
     }
 
     /** Opening a source from the answer keeps the answer cached (hidden) so back from that note restores it. */
