@@ -51,34 +51,110 @@ class ProvidersTest {
 
     @Test fun capsKey() = assertEquals("vault/caps/nitro5", ProviderManifest.key("nitro5"))
 
-    @Test fun autoPickIsTheReadyNitroVaultProvider() {
-        val r = ProviderRouting.route(listOf(chat("towerx", "towerx-qwen"), chat("nitro5", "nitro5-qwen")), null)
+    private fun avail(
+        wanted: Set<String> = setOf("vault"),
+        settings: AskSettings = AskSettings(),
+        alive: (String) -> Boolean? = { null },
+        sample: (String) -> HealthSample? = { null },
+        now: Long = 0,
+    ): (Provider) -> Availability {
+        val chain = ProviderAvailability.chain(settings, alive, sample) { now }
+        return { ProviderAvailability.of(it, wanted, chain) }
+    }
+
+    @Test fun autoPickIsTheAvailableNitroVaultProvider() {
+        val r = ProviderRouting.route(listOf(chat("towerx", "towerx-qwen"), chat("nitro5", "nitro5-qwen")), null, availability = avail())
         assertEquals(listOf("nitro5-qwen", "towerx-qwen"), r.order.map { it.id })
     }
 
-    @Test fun notReadyNitroIsLeftOutAndOthersAreOffered() {
-        val r = ProviderRouting.route(listOf(chat("towerx", "towerx-qwen"), chat("nitro5", "nitro5-qwen", ready = false)), null)
+    @Test fun manifestNotReadyMeansOfflineAndOthersAreOffered() {
+        val r = ProviderRouting.route(listOf(chat("towerx", "towerx-qwen"), chat("nitro5", "nitro5-qwen", ready = false)), null, availability = avail())
         assertEquals(listOf("towerx-qwen"), r.order.map { it.id })
-        assertEquals("not ready", r.skipped.single().reason)
+        assertEquals("offline", r.skipped.single().reason)
     }
 
     @Test fun withoutNitroOrderIsStableByIdNotByHost() {
-        val r = ProviderRouting.route(listOf(chat("z", "z-chat"), chat("a", "a-chat"), chat("m", "m-chat")), null)
+        val r = ProviderRouting.route(listOf(chat("z", "z-chat"), chat("a", "a-chat"), chat("m", "m-chat")), null, availability = avail())
         assertEquals(listOf("a-chat", "m-chat", "z-chat"), r.order.map { it.id })
     }
 
-    @Test fun pinWinsOverAutoPickButAnUnusablePinIsIgnored() {
+    @Test fun pinWinsOverAutoPickButAnOfflinePinIsSkipped() {
         val all = listOf(chat("towerx", "towerx-qwen"), chat("nitro5", "nitro5-qwen"))
-        assertEquals("towerx-qwen", ProviderRouting.route(all, "towerx-qwen").order.first().id)
-        assertEquals("nitro5-qwen", ProviderRouting.route(all, "gone").order.first().id)
-        val down = ProviderRouting.route(all, "towerx-qwen") { if (it == "towerx") false else null }
+        assertEquals("towerx-qwen", ProviderRouting.route(all, "towerx-qwen", availability = avail()).order.first().id)
+        assertEquals("nitro5-qwen", ProviderRouting.route(all, "gone", availability = avail()).order.first().id)
+        val down = ProviderRouting.route(all, "towerx-qwen", availability = avail(alive = { if (it == "towerx") false else null }))
         assertEquals(listOf("nitro5-qwen"), down.order.map { it.id })
+        assertEquals("offline", down.skipped.single().reason)
+    }
+
+    // --- availability mapping -------------------------------------------------------------------------------------
+
+    private fun legacy(device: String) = ProviderRouting.fromSettings(AskSettings()).first { it.device == device }
+
+    @Test fun noSignalMeansUnknownAndStillRoutable() {
+        val a = avail()(legacy("towerx"))
+        assertEquals(Availability.Unknown, a)
+        assertTrue(a.routable)
+    }
+
+    @Test fun freshHealthMapsToAvailableOrOffline() {
+        val ok = avail(sample = { HealthSample(true, "up", 1_000) }, now = 2_000)
+        val bad = avail(sample = { HealthSample(false, "Nitro refused the connection", 1_000) }, now = 2_000)
+        assertEquals(Availability.Available, ok(legacy("nitro5")))
+        assertEquals(Availability.Offline, bad(legacy("towerx")))
+        assertFalse(Availability.Offline.routable)
+    }
+
+    @Test fun staleHealthIsIgnored() {
+        val old = avail(sample = { HealthSample(false, "x", 0) }, now = ProviderAvailability.HEALTH_TTL_MS + 1)
+        assertEquals(Availability.Unknown, old(legacy("towerx")))
+    }
+
+    @Test fun presenceGoneMeansOfflineButAliveSaysNothing() {
+        assertEquals(Availability.Offline, avail(alive = { false })(legacy("towerx")))
+        assertEquals(Availability.Unknown, avail(alive = { true })(legacy("towerx")))
+    }
+
+    @Test fun settingsSwitchMeansDisabledAndBeatsEverything() {
+        val a = avail(settings = AskSettings(towerxEnabled = false), sample = { HealthSample(true, "up", 0) })
+        assertEquals(Availability.Disabled, a(legacy("towerx")))
+        assertEquals(Availability.Available, a(legacy("nitro5")))
+    }
+
+    @Test fun manifestOverridesProbes() {
+        val ready = chat("towerx", "towerx-qwen")
+        val notReady = chat("towerx", "towerx-qwen", ready = false)
+        val bad = { _: String -> HealthSample(false, "x", 0) }
+        assertEquals(Availability.Available, avail(sample = bad)(ready))
+        assertEquals(Availability.Offline, avail(sample = { HealthSample(true, "up", 0) })(notReady))
+    }
+
+    @Test fun missingSkillMeansNoSkillOnlyForOtherwiseAvailableChatProviders() {
+        val both = setOf("vault", "code")
+        assertEquals(Availability.NoSkill, avail(wanted = both)(chat("nitro5", "n")))
+        assertEquals(Availability.Available, avail(wanted = both)(chat("towerx", "t", skills = listOf("vault", "code"))))
+        assertEquals(Availability.Offline, avail(wanted = both, alive = { false })(chat("nitro5", "n")))
+    }
+
+    @Test fun localProviderIsAlwaysAvailable() {
+        val gemma = ProviderRouting.all(emptyMap(), AskSettings()).first { it.id == "s24-gemma" }
+        assertEquals(Availability.Available, avail(alive = { false })(gemma))
+    }
+
+    @Test fun unavailableProvidersAreSkippedWithAReason() {
+        val all = listOf(chat("nitro5", "n"), chat("towerx", "t"), chat("lap", "l", skills = listOf("code")))
+        val r = ProviderRouting.route(
+            all, "t",
+            availability = avail(settings = AskSettings(nitroEnabled = false), alive = { if (it == "towerx") false else null }),
+        )
+        assertEquals(emptyList<String>(), r.order.filter { it.id != "l" }.map { it.id })
+        assertEquals(mapOf("n" to "disabled", "t" to "offline", "l" to "no vault skill"), r.skipped.associate { it.provider.id to it.reason })
     }
 
     @Test fun embeddingIndexIsNeverAChatProvider() {
-        val all = ProviderRouting.all(emptyMap(), AskSettings(nitroEnabled = false, towerxEnabled = false))
-        assertEquals(listOf("s24-gemma"), all.map { it.id })
-        assertTrue(ProviderRouting.route(all, null).order.isEmpty())
+        val all = ProviderRouting.all(emptyMap(), AskSettings())
+        assertEquals(listOf("nitro5-qwen", "towerx-qwen", "s24-gemma"), all.map { it.id })
+        assertEquals(listOf("nitro5-qwen", "towerx-qwen"), ProviderRouting.route(all, null).order.map { it.id })
     }
 
     @Test fun manifestReplacesSettingsProviderForItsDeviceOnly() {
@@ -89,15 +165,9 @@ class ProvidersTest {
         assertTrue(all.first { it.id == "nitro5-qwen" }.fromSettings)
     }
 
-    @Test fun settingsSwitchTurnsAHostOff() {
-        val m = mapOf("towerx" to ProviderManifest.parse(caps).getOrThrow())
-        val all = ProviderRouting.all(m, AskSettings(towerxEnabled = false))
-        assertTrue(all.none { it.device == "towerx" })
-    }
-
     @Test fun skillFilterAndRequestOptions() {
         val both = setOf("vault", "code")
-        val r = ProviderRouting.route(listOf(chat("nitro5", "n"), chat("towerx", "t", skills = listOf("vault", "code"))), null, both)
+        val r = ProviderRouting.route(listOf(chat("nitro5", "n"), chat("towerx", "t", skills = listOf("vault", "code"))), null, both, avail(wanted = both))
         assertEquals(listOf("t"), r.order.map { it.id })
         assertEquals("no code skill", r.skipped.single().reason)
         val p = ProviderManifest.parse(caps).getOrThrow()[0]
@@ -153,5 +223,18 @@ class ProvidersTest {
         assertEquals(setOf("vault"), AskSettings.parseSkills(null))
         assertEquals(setOf("vault"), AskSettings.parseSkills("search,bogus"))
         assertEquals(setOf("code", "vault"), AskSettings.parseSkills("code,vault"))
+    }
+}
+
+class ProviderProbeTest {
+    @Test fun probeReportsOkAndDownPerDevice() = kotlinx.coroutines.runBlocking {
+        val gw = object : NitroGateway {
+            override suspend fun health(baseUrl: String) = if ("towerx" in baseUrl) Health.Down("Nitro refused the connection") else Health.Ok
+            override suspend fun chat(baseUrl: String, messages: List<ChatMessage>, options: ChatOptions) = error("not used")
+        }
+        val seen = mutableMapOf<String, Pair<Boolean, String>>()
+        val providers = ProviderRouting.all(emptyMap(), AskSettings(towerxBaseUrl = "https://towerx.example"))
+        ProviderProbe.probe(gw, providers) { d, ok, detail -> seen[d] = ok to detail }
+        assertEquals(mapOf("nitro5" to (true to "up"), "towerx" to (false to "Nitro refused the connection")), seen)
     }
 }

@@ -66,6 +66,10 @@ class AppGraph(app: Application) {
         local = com.vaulthome.app.ask.LocalAnswerEngineStub,
         manifests = { com.vaulthome.app.ask.ProviderMonitor.state.value.manifests },
         deviceAlive = { com.vaulthome.app.ask.ProviderMonitor.alive(it) },
-        onHealth = { device, ok, detail -> if (device == com.vaulthome.app.ask.ProviderRouting.TOWERX_DEVICE) com.vaulthome.app.towerx.TowerXMonitor.onHealth(ok, detail) },
+        healthSample = { com.vaulthome.app.ask.ProviderHealth.sample(it) },
+        onHealth = { device, ok, detail ->
+            com.vaulthome.app.ask.ProviderHealth.report(device, ok, detail)
+            if (device == com.vaulthome.app.ask.ProviderRouting.TOWERX_DEVICE) com.vaulthome.app.towerx.TowerXMonitor.onHealth(ok, detail)
+        },
     )
 }

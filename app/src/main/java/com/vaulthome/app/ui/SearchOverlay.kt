@@ -3,6 +3,7 @@ package com.vaulthome.app.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -314,11 +315,13 @@ private fun CompactAskSwitch(askMode: Boolean, target: AskTarget, onMode: (Boole
             val graph = (LocalContext.current.applicationContext as com.vaulthome.app.VaultHomeApp).graph
             val settingsNow by graph.askSettings.state.collectAsStateWithLifecycle()
             val providers by com.vaulthome.app.ask.ProviderMonitor.state.collectAsStateWithLifecycle()
-            val host = remember(settingsNow, providers) { graph.askOrchestrator.routing().order.firstOrNull()?.hostLabel ?: "Nitro" }
+            val healthNow by com.vaulthome.app.ask.ProviderHealth.state.collectAsStateWithLifecycle()
+            val host = remember(settingsNow, providers, healthNow) { graph.askOrchestrator.routing().order.firstOrNull()?.hostLabel ?: "none available" }
             val (label, ink) = AskBadge.label(target, host) to if (target == AskTarget.Remote) RemoteInk else LocalInk
             Text(
                 label, color = ink, style = MaterialTheme.typography.labelSmall, maxLines = 1,
-                modifier = Modifier.background(Color(0xFF1A1A1A), RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 2.dp),
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { com.vaulthome.app.ask.ProvidersNav.show() }
+                    .background(Color(0xFF1A1A1A)).padding(horizontal = 6.dp, vertical = 2.dp),
             )
             Spacer(Modifier.width(6.dp))
         }

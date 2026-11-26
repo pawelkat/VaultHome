@@ -92,6 +92,68 @@ object ProviderManifest {
     private fun positive(o: JSONObject, key: String): Int? = if (o.isNull(key)) null else o.optInt(key, 0).takeIf { it > 0 }
 }
 
+/** Availability of one provider right now. [routable] ones are tried by Ask (Unknown still gets a `/health` check). */
+enum class Availability(val label: String, val routable: Boolean) {
+    Available("available", true),
+    Unknown("unknown", true),
+    Offline("offline", false),
+    Disabled("disabled", false),
+    NoSkill("no skill", false),
+}
+
+/** Last `/health` result for a device, with the time it was taken. */
+data class HealthSample(val ok: Boolean, val detail: String, val atMs: Long)
+
+/**
+ * Pluggable availability source: `null` = no opinion, so the next source decides. Temporary S24 sources are
+ * hardcoded below (Settings switches, TowerX/Nitro5 presence + `/health`); a Zenoh caps manifest overrides them.
+ */
+fun interface AvailabilitySource {
+    fun availability(p: Provider): Availability?
+}
+
+object ProviderAvailability {
+    /** A health result older than this says nothing any more. */
+    const val HEALTH_TTL_MS = 60_000L
+
+    /** On-device providers need nothing from the network. */
+    val local = AvailabilitySource { p -> if (p.scope == "local") Availability.Available else null }
+
+    /** Settings keep a per-host off switch ("don't use this host"). */
+    fun settingsSwitch(s: AskSettings) = AvailabilitySource { p ->
+        val on = when (p.device) {
+            ProviderRouting.NITRO_DEVICE -> s.nitroEnabled
+            ProviderRouting.TOWERX_DEVICE -> s.towerxEnabled
+            else -> true
+        }
+        if (on) null else Availability.Disabled
+    }
+
+    /** Zenoh presence token `vault/presence/<device>`: a token known gone means offline; alive says nothing more. */
+    fun presence(alive: (String) -> Boolean?) = AvailabilitySource { p -> if (alive(p.device) == false) Availability.Offline else null }
+
+    /** The device's own caps manifest (`ready`) overrides the temporary probes below it. */
+    val manifest = AvailabilitySource { p -> if (p.fromSettings) null else if (p.ready) Availability.Available else Availability.Offline }
+
+    /** Temporary S24 logic: the last `/health` probe (TowerX and Nitro5 alike), if still fresh. */
+    fun health(sample: (String) -> HealthSample?, now: () -> Long) = AvailabilitySource { p ->
+        sample(p.device)?.takeIf { now() - it.atMs <= HEALTH_TTL_MS }?.let { if (it.ok) Availability.Available else Availability.Offline }
+    }
+
+    /** Standard chain, strongest first. */
+    fun chain(
+        s: AskSettings,
+        alive: (String) -> Boolean? = { null },
+        sample: (String) -> HealthSample? = { null },
+        now: () -> Long = System::currentTimeMillis,
+    ): List<AvailabilitySource> = listOf(local, settingsSwitch(s), presence(alive), manifest, health(sample, now))
+
+    fun of(p: Provider, wanted: Set<String>, sources: List<AvailabilitySource>): Availability {
+        val base = sources.firstNotNullOfOrNull { it.availability(p) } ?: Availability.Unknown
+        return if (base.routable && p.kind == Provider.KIND_CHAT && !p.hasSkills(wanted)) Availability.NoSkill else base
+    }
+}
+
 /** Why a provider is not in the try-list. */
 data class Skipped(val provider: Provider, val reason: String)
 
@@ -101,10 +163,10 @@ data class Routing(val order: List<Provider>, val skipped: List<Skipped>)
 /**
  * Provider choice without a baked-in host order (note: "do not prefer any LLM provider").
  *  1. A provider the user pinned in the panel goes first.
- *  2. Otherwise the auto-pick rule from the brief: the ready `nitro5` llm-chat provider with only the `vault` skill.
- *  3. Then every other ready llm-chat provider, by id, so the order is stable and not tied to a host.
- * A provider is left out when it is disabled in Settings, its manifest says `ready=false`, its Zenoh agent is known
- * offline, or it lacks a skill the user asked for. Nothing is assumed up: `/health` still runs before each chat.
+ *  2. Otherwise the auto-pick rule from the brief: the available `nitro5` llm-chat provider with only the `vault` skill.
+ *  3. Then every other available llm-chat provider, by id, so the order is stable and not tied to a host.
+ * Providers whose [Availability] is not routable (offline, disabled, no skill) are never tried; a pinned provider that
+ * goes offline is simply skipped. Unknown ones are tried, since `/health` still runs before each chat.
  */
 object ProviderRouting {
     /** Auto-pick rule from the brief; the panel's pin overrides it. */
@@ -113,10 +175,10 @@ object ProviderRouting {
     const val TOWERX_DEVICE = "towerx"
 
     /** Providers from the Settings URLs: used for a device until a manifest for it arrives. */
-    fun fromSettings(s: AskSettings): List<Provider> = buildList {
-        if (s.nitroEnabled) add(legacy(NITRO_DEVICE, "nitro5-qwen", "Nitro chat proxy", s.nitroBaseUrl))
-        if (s.towerxEnabled) add(legacy(TOWERX_DEVICE, "towerx-qwen", "TowerX chat proxy", s.towerxBaseUrl))
-    }
+    fun fromSettings(s: AskSettings): List<Provider> = listOf(
+        legacy(NITRO_DEVICE, "nitro5-qwen", "Nitro chat proxy", s.nitroBaseUrl),
+        legacy(TOWERX_DEVICE, "towerx-qwen", "TowerX chat proxy", s.towerxBaseUrl),
+    )
 
     private fun legacy(device: String, id: String, title: String, url: String) = Provider(
         id = id, device = device, kind = Provider.KIND_CHAT, title = title, description = "From Settings (no caps manifest yet)",
@@ -127,38 +189,25 @@ object ProviderRouting {
     /** Manifest providers win per device; Settings fill devices without a manifest; the on-device index is always listed. */
     fun all(manifests: Map<String, List<Provider>>, s: AskSettings, localDevice: String = "s24"): List<Provider> {
         val settings = fromSettings(s).filter { it.device !in manifests }
-        val remote = manifests.filterKeys { enabled(it, s) }.values.flatten()
         val localGemma = Provider(
             id = "$localDevice-gemma", device = localDevice, kind = Provider.KIND_EMBEDDING, title = "Local EmbeddingGemma index",
             description = "On-device embedding search only", skills = listOf(Skills.SEARCH), endpoint = "local", transport = "local-index",
             scope = "local", access = "read-only", ready = true, nCtx = null, maxTokensSuggest = null,
         )
-        return (remote + settings).filter { it.device != localDevice || it.kind != Provider.KIND_EMBEDDING } + localGemma
-    }
-
-    /** Settings switches stay as per-host off switches ("don't use this host"), not as an order. */
-    private fun enabled(device: String, s: AskSettings) = when (device) {
-        NITRO_DEVICE -> s.nitroEnabled
-        TOWERX_DEVICE -> s.towerxEnabled
-        else -> true
+        return (manifests.values.flatten() + settings).filter { it.device != localDevice || it.kind != Provider.KIND_EMBEDDING } + localGemma
     }
 
     fun route(
         providers: List<Provider>,
         pinnedId: String?,
         wanted: Set<String> = setOf(Skills.VAULT),
-        deviceAlive: (String) -> Boolean? = { null },
+        availability: (Provider) -> Availability = { Availability.Unknown },
     ): Routing {
         val skipped = mutableListOf<Skipped>()
         val usable = providers.filter { it.isChat }.filter { p ->
-            val why = when {
-                !p.ready -> "not ready"
-                deviceAlive(p.device) == false -> "offline in Zenoh"
-                !p.hasSkills(wanted) -> "no ${(wanted - p.skills.toSet()).joinToString("/")} skill"
-                else -> null
-            }
-            if (why != null) skipped += Skipped(p, why)
-            why == null
+            val a = availability(p)
+            if (!a.routable) skipped += Skipped(p, if (a == Availability.NoSkill) "no ${(wanted - p.skills.toSet()).joinToString("/")} skill" else a.label)
+            a.routable
         }.sortedBy { it.id }
         val first = usable.firstOrNull { it.id == pinnedId }
             ?: usable.firstOrNull { it.device == AUTO_PICK_DEVICE && it.skills == listOf(Skills.VAULT) }

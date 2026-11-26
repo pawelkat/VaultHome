@@ -67,13 +67,17 @@ class AskOrchestrator(
     private val manifests: () -> Map<String, List<Provider>> = { emptyMap() },
     /** Zenoh presence token `vault/presence/<device>`: true/false, `null` = unknown or no Zenoh session. */
     private val deviceAlive: (String) -> Boolean? = { null },
+    /** Last `/health` per device (temporary S24 availability source). */
+    private val healthSample: (String) -> HealthSample? = { null },
+    private val now: () -> Long = System::currentTimeMillis,
     /** Reports each `/health` result per device (for the Settings indicators). */
     private val onHealth: (String, Boolean, String) -> Unit = { _, _, _ -> },
 ) {
     /** The providers [ask] would try right now, in order (also used by the badge and the Providers panel). */
     fun routing(): Routing {
         val s = settings()
-        return ProviderRouting.route(ProviderRouting.all(manifests(), s), s.pinnedProviderId, s.skills, deviceAlive)
+        val sources = ProviderAvailability.chain(s, deviceAlive, healthSample, now)
+        return ProviderRouting.route(ProviderRouting.all(manifests(), s), s.pinnedProviderId, s.skills) { ProviderAvailability.of(it, s.skills, sources) }
     }
 
     suspend fun ask(question: String, onPhase: (AskPhase) -> Unit = {}): AskOutcome = coroutineScope {
@@ -86,8 +90,9 @@ class AskOrchestrator(
         // Earlier providers that failed: "Label: reason; ", kept in front of the last reason.
         var notes = ""
         var skip = NitroSkip.Disabled
-        var detail = if (routing.skipped.isEmpty()) "No chat provider is enabled in Settings" else ""
-        routing.skipped.forEach { notes += "${it.provider.hostLabel}: ${it.reason}; " }
+        // Hosts switched off in Settings are the user's choice, not news; the others say why they were left out.
+        routing.skipped.filter { it.reason != Availability.Disabled.label }.forEach { notes += "${it.provider.hostLabel}: ${it.reason}; " }
+        var detail = if (notes.isEmpty()) "No chat provider is enabled in Settings" else ""
         for ((index, p) in routing.order.withIndex()) {
             onPhase(AskPhase.CheckingNitro)
             var health = nitro.health(p.baseUrl)

@@ -64,6 +64,19 @@ class AskOrchestratorTest {
         deviceAlive = { if (it == "towerx") agent else null }, onHealth = { d, ok, _ -> if (d == "towerx") health += ok },
     )
 
+    @Test fun disabledAndStaleOfflineHostsAreNotAsked() = runBlocking {
+        val gw = TwoHosts(Health.Ok)
+        val fresh = HealthSample(false, "Nitro refused the connection", atMs = 1_000)
+        val o = AskOrchestrator(gw, { AskSettings() }, { hits }, healthSample = { if (it == "nitro5") fresh else null }, now = { 2_000 })
+        val out = o.ask("q") as AskOutcome.Nitro
+        assertEquals("TowerX", out.host)
+        assertEquals(listOf(AskSettings.DEFAULT_TOWERX_URL), gw.asked)
+        // An old offline sample says nothing any more: Nitro is tried again.
+        val gw2 = TwoHosts(Health.Ok)
+        val later = AskOrchestrator(gw2, { AskSettings() }, { hits }, healthSample = { fresh }, now = { 1_000 + ProviderAvailability.HEALTH_TTL_MS + 1 })
+        assertEquals("Nitro", (later.ask("q") as AskOutcome.Nitro).host)
+    }
+
     private fun chatProvider(device: String, id: String, skills: List<String> = listOf("vault"), ready: Boolean = true, nCtx: Int? = 16384, max: Int? = 2048) = Provider(
         id = id, device = device, kind = "llm-chat", title = id, description = "", skills = skills,
         endpoint = "https://$device.example.ts.net/v1/chat/completions", transport = "chat-proxy", scope = "tailnet",
@@ -111,7 +124,7 @@ class AskOrchestratorTest {
     @Test fun towerxOfflineInZenohIsNotTried() = runBlocking {
         val gw = TwoHosts(Health.Ok, nitro = Health.Down("Nitro refused the connection"))
         val out = withTowerX(gw, agent = false).ask("q") as AskOutcome.SearchOnly
-        assertEquals("TowerX: offline in Zenoh; Nitro refused the connection".split("; ").sorted(), out.nitroDetail.split("; ").sorted())
+        assertEquals("TowerX: offline; Nitro refused the connection".split("; ").sorted(), out.nitroDetail.split("; ").sorted())
         assertEquals(emptyList<String>(), gw.asked)
     }
 

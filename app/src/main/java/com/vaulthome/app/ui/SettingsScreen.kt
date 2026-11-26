@@ -99,7 +99,6 @@ fun SettingsScreen(
             Text("Model is in app storage", color = Color(0xFF8A8A8A))
         }
         if (askViewModel != null) AskSettingsSection(askViewModel)
-        ProvidersSection()
         TowerXSection()
         X4SettingsSection()
         EventSyncSection(onGrantVaultWrite, onRequestNotifications)
@@ -147,57 +146,6 @@ private fun AskSettingsSection(askViewModel: com.vaulthome.app.ask.AskViewModel)
         "Plain http works only to 192.168.1.18 and localhost; Tailscale uses HTTPS. No API key is stored. On-device answers (Gemma 4 E2B) come in a later build; until then Ask falls back to matching notes.",
         color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
     )
-}
-
-/**
- * Ask providers: lists every chat provider (from Zenoh caps manifests, else the Settings URLs) and lets the user pin
- * one; "Auto" follows the routing rule (no host is preferred). The skill chips show only skills a ready provider has.
- */
-@Composable
-private fun ProvidersSection() {
-    val ctx = LocalContext.current
-    val graph = (ctx.applicationContext as com.vaulthome.app.VaultHomeApp).graph
-    val store = graph.askSettings
-    val ask by store.state.collectAsStateWithLifecycle()
-    val ps by com.vaulthome.app.ask.ProviderMonitor.state.collectAsStateWithLifecycle()
-    val all = com.vaulthome.app.ask.ProviderRouting.all(ps.manifests, ask)
-    val chat = all.filter { it.isChat }
-    val routing = com.vaulthome.app.ask.ProviderRouting.route(all, ask.pinnedProviderId, ask.skills) { ps.alive[it] }
-    val skipped = routing.skipped.associate { it.provider.id to it.reason }
-    Text("Ask providers", style = MaterialTheme.typography.titleMedium, color = Ink)
-    if (!ps.session) Text("Turn on Event sync to discover providers over Zenoh; Settings URLs are used meanwhile.", color = Muted, style = MaterialTheme.typography.bodySmall)
-    Row(Modifier.fillMaxWidth().selectable(selected = ask.pinnedProviderId == null, onClick = { store.update { it.copy(pinnedProviderId = null) } }), verticalAlignment = Alignment.CenterVertically) {
-        RadioButton(selected = ask.pinnedProviderId == null, onClick = null)
-        Text("Auto" + (routing.order.firstOrNull()?.let { " (now: ${it.hostLabel})" } ?: " (none ready)"), color = Ink, modifier = Modifier.padding(start = 8.dp))
-    }
-    chat.forEach { p ->
-        val why = skipped[p.id]
-        Row(Modifier.fillMaxWidth().selectable(selected = ask.pinnedProviderId == p.id, onClick = { store.update { it.copy(pinnedProviderId = p.id) } }), verticalAlignment = Alignment.CenterVertically) {
-            RadioButton(selected = ask.pinnedProviderId == p.id, onClick = null)
-            Column(Modifier.padding(start = 8.dp)) {
-                Text("${p.title} · ${p.hostLabel}", color = Ink)
-                Text(
-                    (why ?: "ready") + " · skills ${p.skills.joinToString("/")}" + (p.nCtx?.let { " · n_ctx $it" } ?: ""),
-                    color = if (why == null) Color(0xFF5CC489) else Muted, style = MaterialTheme.typography.bodySmall,
-                )
-            }
-        }
-    }
-    all.filter { !it.isChat }.forEach { p ->
-        Text("${p.title}: ${p.skills.joinToString("/")} only, not a chat backend", color = Muted, style = MaterialTheme.typography.bodySmall)
-    }
-    val codeOffered = chat.any { it.ready && com.vaulthome.app.ask.Skills.CODE in it.skills }
-    if (codeOffered) {
-        val v = com.vaulthome.app.ask.Skills.VAULT
-        val c = com.vaulthome.app.ask.Skills.CODE
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Skills", color = Ink)
-            listOf("Vault" to setOf(v), "Code" to setOf(c), "Both" to setOf(v, c)).forEach { (label, set) ->
-                androidx.compose.material3.FilterChip(selected = ask.skills == set, onClick = { store.update { it.copy(skills = set) } }, label = { Text(label) })
-            }
-        }
-    }
-    ps.errors.forEach { (d, e) -> Text("$d caps: $e", color = Muted, style = MaterialTheme.typography.bodySmall) }
 }
 
 @Composable
