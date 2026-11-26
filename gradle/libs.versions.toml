@@ -13,6 +13,8 @@ glance = "1.1.1"
 documentfile = "1.0.1"
 litertlm = "0.17.1"
 junit = "4.13.2"
+zenoh = "1.10.2"
+kotlinxSerialization = "1.8.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -35,9 +37,14 @@ androidx-documentfile = { group = "androidx.documentfile", name = "documentfile"
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertlm" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+# Eclipse Zenoh Kotlin bindings (EPL-2.0 OR Apache-2.0). Android AAR ships libzenoh_flat_jni.so per ABI; JVM jar is for box tests.
+zenoh-kotlin-android = { group = "org.eclipse.zenoh", name = "zenoh-kotlin-android", version.ref = "zenoh" }
+zenoh-kotlin-jvm = { group = "org.eclipse.zenoh", name = "zenoh-kotlin", version.ref = "zenoh" }
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }

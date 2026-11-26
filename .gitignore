@@ -20,3 +20,6 @@ out/
 .env
 *.keystore
 *.jks
+tools/vault-events-golden/target/
+tools/vault-events-golden/Cargo.lock
+/vault-events/build/
