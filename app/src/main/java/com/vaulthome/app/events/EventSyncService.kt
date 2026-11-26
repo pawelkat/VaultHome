@@ -151,11 +151,18 @@ class EventSyncService : Service() {
             },
             onNotices = { n -> if (settings.notifySynced) notifier.post(n) },
             // TowerX power board + TowerX agent tokens for Settings and Ask (vault note `Grok Bot - TowerX power`).
-            watchTokens = com.vaulthome.app.towerx.TowerXKeys.WATCH,
-            onToken = com.vaulthome.app.towerx.TowerXMonitor::onToken,
+            // Plus every device's presence token: the Ask providers panel follows joins/leaves and reads `vault/caps/<device>`.
+            watchTokens = com.vaulthome.app.towerx.TowerXKeys.WATCH + com.vaulthome.events.Presence.WILDCARD,
+            onToken = { key, alive ->
+                com.vaulthome.app.towerx.TowerXMonitor.onToken(key, alive)
+                com.vaulthome.app.ask.ProviderMonitor.onToken(key, alive)
+            },
         )
         engine = e
         com.vaulthome.app.towerx.TowerXMonitor.caller = { sel, payload, ms -> e.call(sel, payload, ms) }
+        com.vaulthome.app.ask.ProviderMonitor.selfDevice = settings.device
+        com.vaulthome.app.ask.ProviderMonitor.caller = { sel, payload, ms -> e.call(sel, payload, ms) }
+        com.vaulthome.app.ask.ProviderMonitor.onSessionStarted()
         running = settings
         if (settings.mode == LinkMode.ROUTER) acquireWakeLock() else releaseWakeLock()
         mutable.value = EventSyncState(running = true, status = e.status, endpoint = endpoint(link.connect))
@@ -222,6 +229,8 @@ class EventSyncService : Service() {
     private fun stopEngine() {
         com.vaulthome.app.towerx.TowerXMonitor.caller = null
         com.vaulthome.app.towerx.TowerXMonitor.onSessionClosed()
+        com.vaulthome.app.ask.ProviderMonitor.caller = null
+        com.vaulthome.app.ask.ProviderMonitor.onSessionClosed()
         engine?.stop()
         engine = null
         running = null

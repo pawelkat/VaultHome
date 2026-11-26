@@ -24,6 +24,10 @@ data class AskSettings(
     /** Try TowerX first when its Zenoh agent is alive and its chat proxy /health is OK (llama-server + vault-searchd). */
     val towerxEnabled: Boolean = true,
     val towerxBaseUrl: String = DEFAULT_TOWERX_URL,
+    /** Provider the user pinned in the Providers panel; `null` = auto-pick (see [ProviderRouting]). */
+    val pinnedProviderId: String? = null,
+    /** Skills asked of the provider: `vault` (default), `code`, or both. */
+    val skills: Set<String> = setOf(Skills.VAULT),
 ) {
     /** The search bar is in Ask mode only when Ask is enabled and the switch is on Ask. */
     val askActive: Boolean get() = askEnabled && askMode
@@ -47,6 +51,10 @@ data class AskSettings(
         /** A stored URL equal to the old raw-llama default moves to the chat proxy; custom URLs are kept. */
         fun migrateStoredUrl(stored: String?): String =
             if (stored == null || stored == LEGACY_RAW_LLAMA_URL) DEFAULT_NITRO_URL else stored
+
+        /** Stored `code,vault` → set; blank or unknown values fall back to vault only. */
+        fun parseSkills(raw: String?): Set<String> =
+            raw.orEmpty().split(',').map { it.trim() }.filter { it == Skills.VAULT || it == Skills.CODE }.toSet().ifEmpty { setOf(Skills.VAULT) }
 
         /** Trims, adds `http://` when no scheme is typed, drops trailing slashes and a trailing `/v1`. */
         fun normalizeBaseUrl(raw: String): String {
@@ -83,6 +91,8 @@ class AskSettingsStore(context: Context) {
         askMode = prefs.getBoolean(KEY_MODE, false),
         towerxEnabled = prefs.getBoolean(KEY_TOWERX, true),
         towerxBaseUrl = prefs.getString(KEY_TOWERX_URL, null) ?: AskSettings.DEFAULT_TOWERX_URL,
+        pinnedProviderId = prefs.getString(KEY_PIN, null)?.takeIf { it.isNotBlank() },
+        skills = AskSettings.parseSkills(prefs.getString(KEY_SKILLS, null)),
     )
 
     fun update(transform: (AskSettings) -> AskSettings) {
@@ -95,6 +105,8 @@ class AskSettingsStore(context: Context) {
             .putBoolean(KEY_MODE, next.askMode)
             .putBoolean(KEY_TOWERX, next.towerxEnabled)
             .putString(KEY_TOWERX_URL, next.towerxBaseUrl)
+            .putString(KEY_PIN, next.pinnedProviderId)
+            .putString(KEY_SKILLS, next.skills.sorted().joinToString(","))
             .apply()
         flow.value = next
     }
@@ -107,5 +119,7 @@ class AskSettingsStore(context: Context) {
         const val KEY_MODE = "search_bar_ask_mode"
         const val KEY_TOWERX = "towerx_enabled"
         const val KEY_TOWERX_URL = "towerx_base_url"
+        const val KEY_PIN = "pinned_provider"
+        const val KEY_SKILLS = "ask_skills"
     }
 }

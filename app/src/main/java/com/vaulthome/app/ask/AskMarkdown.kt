@@ -32,7 +32,10 @@ object AskMarkdown {
     fun format(question: String, outcome: AskOutcome): String = buildString {
         if (question.isNotBlank()) append("*Q: ").append(escapeInline(oneLine(question))).append("*\n\n")
         when (outcome) {
-            is AskOutcome.Nitro -> append(body(outcome.answer)).append("\n\n")
+            is AskOutcome.Nitro -> {
+                append(body(outcome.answer)).append("\n\n")
+                outcome.sizingNote?.let { append("*").append(escapeInline(it)).append("*\n\n") }
+            }
             is AskOutcome.Local -> {
                 append("> Nitro skipped: ").append(escapeInline(oneLine(outcome.nitroDetail))).append("\n\n")
                 append(body(outcome.answer)).append("\n\n")

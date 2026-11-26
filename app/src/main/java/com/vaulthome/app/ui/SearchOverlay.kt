@@ -310,8 +310,12 @@ private val LocalInk = Color(0xFF5CC489)
 private fun CompactAskSwitch(askMode: Boolean, target: AskTarget, onMode: (Boolean) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         if (askMode) {
-            val tx by com.vaulthome.app.towerx.TowerXMonitor.state.collectAsStateWithLifecycle()
-            val (label, ink) = AskBadge.label(target, if (tx.askAvailable) "TowerX" else "Nitro") to if (target == AskTarget.Remote) RemoteInk else LocalInk
+            // Who would answer right now: first of the routing (pin, auto-pick rule, then any ready provider).
+            val graph = (LocalContext.current.applicationContext as com.vaulthome.app.VaultHomeApp).graph
+            val settingsNow by graph.askSettings.state.collectAsStateWithLifecycle()
+            val providers by com.vaulthome.app.ask.ProviderMonitor.state.collectAsStateWithLifecycle()
+            val host = remember(settingsNow, providers) { graph.askOrchestrator.routing().order.firstOrNull()?.hostLabel ?: "Nitro" }
+            val (label, ink) = AskBadge.label(target, host) to if (target == AskTarget.Remote) RemoteInk else LocalInk
             Text(
                 label, color = ink, style = MaterialTheme.typography.labelSmall, maxLines = 1,
                 modifier = Modifier.background(Color(0xFF1A1A1A), RoundedCornerShape(8.dp)).padding(horizontal = 6.dp, vertical = 2.dp),

@@ -20,10 +20,16 @@ sealed interface Health {
 /** What the Ask path needs from Nitro; an interface so the orchestrator can be tested without sockets. */
 interface NitroGateway {
     suspend fun health(baseUrl: String): Health
-    suspend fun chat(baseUrl: String, messages: List<ChatMessage>): ChatReply
+    suspend fun chat(baseUrl: String, messages: List<ChatMessage>, options: ChatOptions = ChatOptions()): ChatReply
 }
 
 data class ChatMessage(val role: String, val content: String)
+
+/**
+ * Per-request sizing from the provider manifest. [skills] is the proposed `skills` request field; `null` omits it
+ * (vault only, today's behaviour).
+ */
+data class ChatOptions(val maxTokens: Int = 1024, val skills: List<String>? = null)
 data class ChatReply(val content: String, val model: String?)
 
 class NitroException(message: String, cause: Throwable? = null) : IOException(message, cause)
@@ -59,8 +65,8 @@ class NitroClient(
         }
     }
 
-    override suspend fun chat(baseUrl: String, messages: List<ChatMessage>): ChatReply = withContext(Dispatchers.IO) {
-        val body = ChatJson.request(messages).toByteArray(Charsets.UTF_8)
+    override suspend fun chat(baseUrl: String, messages: List<ChatMessage>, options: ChatOptions): ChatReply = withContext(Dispatchers.IO) {
+        val body = ChatJson.request(messages, options).toByteArray(Charsets.UTF_8)
         val connection = try {
             open("$baseUrl/v1/chat/completions", chatConnectTimeoutMs, chatReadTimeoutMs)
         } catch (e: Exception) {
@@ -121,18 +127,19 @@ class NitroClient(
 
 /** OpenAI chat JSON for llama-server. */
 object ChatJson {
-    fun request(messages: List<ChatMessage>): String {
+    fun request(messages: List<ChatMessage>, options: ChatOptions = ChatOptions()): String {
         val array = JSONArray()
         messages.forEach { array.put(JSONObject().put("role", it.role).put("content", it.content)) }
-        return JSONObject()
+        val body = JSONObject()
             .put("model", "nitro")
             .put("messages", array)
             .put("stream", false)
             .put("temperature", 0.3)
-            .put("max_tokens", 1024)
+            .put("max_tokens", options.maxTokens)
             // Qwen3.x on llama-server: skip the thinking pass so the phone gets an answer sooner.
             .put("chat_template_kwargs", JSONObject().put("enable_thinking", false))
-            .toString()
+        options.skills?.let { body.put("skills", JSONArray(it)) }
+        return body.toString()
     }
 
     fun parseReply(json: String): ChatReply {

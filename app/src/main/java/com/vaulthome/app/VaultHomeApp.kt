@@ -64,7 +64,8 @@ class AppGraph(app: Application) {
         },
         // PR-B: replace with the Gemma 4 E2B LiteRT-LM engine.
         local = com.vaulthome.app.ask.LocalAnswerEngineStub,
-        towerxAgentAlive = { com.vaulthome.app.towerx.TowerXMonitor.state.value.agentAlive },
-        onTowerXHealth = { ok, detail -> com.vaulthome.app.towerx.TowerXMonitor.onHealth(ok, detail) },
+        manifests = { com.vaulthome.app.ask.ProviderMonitor.state.value.manifests },
+        deviceAlive = { com.vaulthome.app.ask.ProviderMonitor.alive(it) },
+        onHealth = { device, ok, detail -> if (device == com.vaulthome.app.ask.ProviderRouting.TOWERX_DEVICE) com.vaulthome.app.towerx.TowerXMonitor.onHealth(ok, detail) },
     )
 }
