@@ -28,7 +28,7 @@ sealed interface AskOutcome {
         override val searchError: String?,
         /** Which chat proxy answered (device label, e.g. `TowerX` or `Nitro`). */
         val host: String = "Nitro",
-        /** Set when the request could not be sized from a manifest (e.g. `n_ctx unknown: using 1024 tokens`). */
+        /** Set when the app applied its own token cap (the nitro5 1024 fallback when `n_ctx` is missing). */
         val sizingNote: String? = null,
     ) : AskOutcome
 

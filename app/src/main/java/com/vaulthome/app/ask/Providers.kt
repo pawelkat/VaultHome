@@ -221,11 +221,16 @@ object ProviderRouting {
         return Routing(order, skipped)
     }
 
-    /** `max_tokens` from the live manifest, else today's 1024. [note] is non-null when n_ctx was missing (shown in the UI). */
+    /**
+     * Request sizing. [Provider.maxTokensSuggest] always wins when present.
+     * If `n_ctx` is unknown and no suggest is given, only the nitro5 provider gets today's 1024 cap (and the UI note);
+     * every other provider omits `max_tokens` so the server decides.
+     */
     fun options(p: Provider, wanted: Set<String>): Pair<ChatOptions, String?> {
-        val max = if (p.nCtx == null) Provider.DEFAULT_MAX_TOKENS else p.maxTokensSuggest ?: Provider.DEFAULT_MAX_TOKENS
         val skills = if (wanted == setOf(Skills.VAULT)) null else wanted.sorted()
-        val note = if (p.nCtx == null) "n_ctx unknown: using $max tokens" else null
+        val appliedFallback = p.maxTokensSuggest == null && p.nCtx == null && p.device == NITRO_DEVICE
+        val max = p.maxTokensSuggest ?: if (appliedFallback) Provider.DEFAULT_MAX_TOKENS else null
+        val note = if (appliedFallback) "n_ctx unknown: using ${Provider.DEFAULT_MAX_TOKENS} tokens" else null
         return ChatOptions(max, skills) to note
     }
 }
