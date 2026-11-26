@@ -47,10 +47,14 @@ object RouterListStatus {
      * Live linked count vs how many endpoints were actually dialled.
      * [configured] is the merged Settings + shared list (what Zenoh received).
      */
-    fun linkedPhrase(mode: LinkMode?, linked: Int, configured: Int): String {
+    fun linkedPhrase(mode: LinkMode?, linked: Int, configured: Int, fromVault: Int = 0): String {
         val of = if (configured > 0) " of $configured" else ""
         val noun = if (max(linked, configured) == 1) "router linked" else "routers linked"
-        val note = if (mode == LinkMode.CLIENT && configured > 1) " (client uses one at a time)" else ""
+        val bits = buildList {
+            if (fromVault > 0) add("$fromVault from vault")
+            if (mode == LinkMode.CLIENT && configured > 1) add("client uses one at a time")
+        }
+        val note = if (bits.isEmpty()) "" else " (${bits.joinToString("; ")})"
         return "$linked$of $noun$note"
     }
 
@@ -58,6 +62,7 @@ object RouterListStatus {
         enabled: Boolean,
         state: EventSyncState,
         fallbackConnect: List<String> = emptyList(),
+        fromVault: Int = state.fromVault,
     ): String {
         if (!enabled) return "Status: off"
         if (!state.running) return "Status: not running"
@@ -69,13 +74,13 @@ object RouterListStatus {
             EngineStatus.Phase.STOPPED -> "stopped"
         }
         val configured = st.connect.ifEmpty { fallbackConnect }.size
-        return "Status: $phase · ${linkedPhrase(st.mode, st.routers, configured)} · ${st.peers} peers · " +
+        return "Status: $phase · ${linkedPhrase(st.mode, st.routers, configured, fromVault)} · ${st.peers} peers · " +
             "${st.tracked} notes tracked · ${st.published} sent · ${st.applied} applied · ${st.conflicts} conflicts"
     }
 
-    fun notificationSummary(mode: LinkMode, st: EngineStatus): String {
+    fun notificationSummary(mode: LinkMode, st: EngineStatus, fromVault: Int = 0): String {
         val configured = st.connect.size
-        val links = "${linkedPhrase(st.mode ?: mode, st.routers, configured)}, " +
+        val links = "${linkedPhrase(st.mode ?: mode, st.routers, configured, fromVault)}, " +
             "${st.peers} peer${if (st.peers == 1) "" else "s"}"
         return when (st.phase) {
             EngineStatus.Phase.CONNECTED -> "${mode.label} · $links · ${st.tracked} notes"

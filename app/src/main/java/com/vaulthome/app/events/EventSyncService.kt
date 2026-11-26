@@ -39,6 +39,8 @@ data class EventSyncState(
     val status: EngineStatus = EngineStatus(),
     val error: String? = null,
     val endpoint: String? = null,
+    /** How many of [EngineStatus.connect] came from the vault endpoints.json, not Settings. */
+    val fromVault: Int = 0,
 )
 
 /**
@@ -111,11 +113,15 @@ class EventSyncService : Service() {
         val core = SyncCore(fs, settings.device, state, stateFile)
         runCatching { io.zenoh.Zenoh.initLogFromEnvOr("warn") }
         val link = settings.linkConfig()
+        var sharedCfg: com.vaulthome.events.SharedConfig? = null
         val notifier = SyncedNotesNotifier(this).also { it.ensureChannel() }
         fun endpoint(connect: List<String>) = when (settings.mode) {
             LinkMode.CLIENT -> connect.joinToString()
             else -> "listen ${settings.listen.joinToString()}" + if (connect.isNotEmpty()) ", connect ${connect.joinToString()}" else ""
         }
+        fun fromVault(): Int =
+            if (!settings.useSharedEndpoints) 0
+            else SharedEndpoints.dialTargets(settings.connect, sharedCfg, settings.selfEntry()).count { it.source == SharedEndpoints.DialSource.VAULT }
         val e = SyncEngine(
             core = core,
             config = link,
@@ -124,7 +130,7 @@ class EventSyncService : Service() {
             // Large files: partial chunk downloads live in the app cache, never in the SAF vault tree.
             options = EngineOptions(partialDir = File(cacheDir, "vault-events-partial")),
             onStatus = { st ->
-                mutable.value = EventSyncState(running = true, status = st, endpoint = endpoint(st.connect.ifEmpty { link.connect }))
+                mutable.value = EventSyncState(running = true, status = st, endpoint = endpoint(st.connect.ifEmpty { link.connect }), fromVault = fromVault())
                 notifyStatus(settings, st)
             },
             onVaultChanged = { changed ->
@@ -138,7 +144,10 @@ class EventSyncService : Service() {
             // Shared endpoint list in the vault: read before each connect, self entry merged after the first catch-up
             // (so the hub's newer copy is applied first and other devices' entries are kept).
             resolveConfig = { cfg ->
-                if (!settings.useSharedEndpoints) cfg else settings.linkConfig(SharedEndpoints.parse((fs.read(SharedEndpoints.PATH) as? Disk.Present)?.bytes))
+                if (!settings.useSharedEndpoints) cfg else {
+                    sharedCfg = SharedEndpoints.parse((fs.read(SharedEndpoints.PATH) as? Disk.Present)?.bytes)
+                    settings.linkConfig(sharedCfg)
+                }
             },
             onConnected = {
                 // Caught up with the hub: one incremental pass picks up anything the live events did not list.
@@ -175,12 +184,12 @@ class EventSyncService : Service() {
         com.vaulthome.app.ask.ProviderMonitor.onSessionStarted()
         running = settings
         if (settings.mode == LinkMode.ROUTER) acquireWakeLock() else releaseWakeLock()
-        mutable.value = EventSyncState(running = true, status = e.status, endpoint = endpoint(link.connect))
+        mutable.value = EventSyncState(running = true, status = e.status, endpoint = endpoint(link.connect), fromVault = fromVault())
         e.start()
     }
 
     private fun summary(s: EventSyncSettings, st: EngineStatus): String =
-        RouterListStatus.notificationSummary(s.mode, st)
+        RouterListStatus.notificationSummary(s.mode, st, mutable.value.fromVault)
 
     private fun notifyStatus(s: EventSyncSettings, st: EngineStatus) {
         val text = summary(s, st)

@@ -60,9 +60,23 @@ object SharedEndpoints {
     const val LAST_SEEN_REFRESH_MS: Long = 6 * 60 * 60 * 1000L
 
     private val pretty = Json { prettyPrint = true; prettyPrintIndent = "  " }
-    private val endpointRe = Regex("(tcp|udp|tls|quic|ws)/(\\[[0-9a-fA-F:]+]|[A-Za-z0-9.-]+):([0-9]{1,5})")
+    private val endpointRe = Regex("(?i)(tcp|udp|tls|quic|ws)/(\\[[0-9a-fA-F:]+]|[A-Za-z0-9.-]+):([0-9]{1,5})")
+    private val ipv4Labeled = Regex("""(?i)IPv4\s+(\d{1,3}(?:\.\d{1,3}){3})""")
 
-    fun isEndpoint(e: String): Boolean = endpointRe.matchEntire(e)?.let { it.groupValues[3].toInt() in 1..65535 } == true
+    fun isEndpoint(e: String): Boolean = normalizeEndpoint(e) != null
+
+    /**
+     * Canonical `tcp/host:port` (lowercase proto and host, trailing-dot and `#`/`?` params stripped).
+     * `null` if it is not a valid endpoint.
+     */
+    fun normalizeEndpoint(e: String): String? {
+        val raw = e.trim().substringBefore('#').substringBefore('?')
+        val m = endpointRe.matchEntire(raw) ?: return null
+        val port = m.groupValues[3].toInt()
+        if (port !in 1..65535) return null
+        val host = m.groupValues[2].trimEnd('.').lowercase()
+        return "${m.groupValues[1].lowercase()}/$host:$port"
+    }
 
     /** Known hosts on Pawel's tailnet (names from vault notes / tailnet DNS), used to seed the file. */
     val DEFAULT_ROUTERS: List<RouterEntry> = listOf(
@@ -97,20 +111,108 @@ object SharedEndpoints {
         return SharedConfig(routers, devices)
     }
 
+    /** Where a dial entry came from, for the Settings list. */
+    enum class DialSource { SETTINGS, VAULT }
+
+    /** One distinct router in the effective dial list (Settings first, then vault extras). */
+    data class DialTarget(val endpoint: String, val source: DialSource, val id: String? = null)
+
     /**
      * Endpoints to dial: [local] first, then dialable routers, then other devices that accept
      * connections (router/peer with an endpoint). Never this device's own endpoint; invalid entries dropped.
+     * Distinct after [normalizeEndpoint]; hostname / MagicDNS / labelled IPv4 aliases of the same
+     * device (from [shared] entries) collapse to the first locator.
      */
-    fun connectList(local: List<String>, shared: SharedConfig?, self: DeviceEntry): List<String> {
-        val out = LinkedHashSet<String>()
-        local.filterTo(out) { isEndpoint(it) }
-        if (shared != null) {
-            shared.routers.filter { it.dialable && it.id != self.device }.mapNotNullTo(out) { r -> r.endpoint?.takeIf { isEndpoint(it) } }
-            shared.devices.values.filter { it.device != self.device && it.mode != LinkMode.CLIENT }
-                .mapNotNullTo(out) { d -> d.endpoint?.takeIf { isEndpoint(it) } }
+    fun connectList(local: List<String>, shared: SharedConfig?, self: DeviceEntry): List<String> =
+        dialTargets(local, shared, self).map { it.endpoint }
+
+    fun dialTargets(local: List<String>, shared: SharedConfig?, self: DeviceEntry): List<DialTarget> {
+        val aliases = HostAliases(shared)
+        val out = ArrayList<DialTarget>()
+        fun add(raw: String?, source: DialSource, id: String?) {
+            val canonical = raw?.let { normalizeEndpoint(it) } ?: return
+            if (self.endpoint?.let { aliases.sameRouter(it, canonical) } == true) return
+            if (out.any { aliases.sameRouter(it.endpoint, canonical) }) return
+            out.add(DialTarget(canonical, source, id))
         }
-        self.endpoint?.let { out.remove(it) }
-        return out.toList()
+        local.forEach { add(it, DialSource.SETTINGS, null) }
+        if (shared != null) {
+            shared.routers.filter { it.dialable && it.id != self.device }.forEach { add(it.endpoint, DialSource.VAULT, it.id) }
+            shared.devices.values.filter { it.device != self.device && it.mode != LinkMode.CLIENT }
+                .forEach { add(it.endpoint, DialSource.VAULT, it.device) }
+        }
+        return out
+    }
+
+    /** Hosts that should be treated as the same device (MagicDNS, short name, labelled IPv4). */
+    internal class HostAliases(shared: SharedConfig?) {
+        private val parent = HashMap<String, String>()
+
+        init {
+            if (shared != null) {
+                for (r in shared.routers) unionAll(hostsOf(r.endpoint, r.tailnetName, r.note))
+                for (d in shared.devices.values) unionAll(hostsOf(d.endpoint, d.tailnetName, null))
+            }
+        }
+
+        fun sameRouter(a: String, b: String): Boolean {
+            val ka = key(a) ?: return false
+            val kb = key(b) ?: return false
+            if (ka == kb) return true
+            if (ka.proto != kb.proto || ka.port != kb.port) return false
+            return find(ka.host) == find(kb.host)
+        }
+
+        private data class Key(val proto: String, val host: String, val port: Int)
+
+        private fun key(e: String): Key? {
+            val n = normalizeEndpoint(e) ?: return null
+            val slash = n.indexOf('/')
+            val colon = n.lastIndexOf(':')
+            return Key(n.substring(0, slash), n.substring(slash + 1, colon), n.substring(colon + 1).toInt())
+        }
+
+        private fun hostsOf(endpoint: String?, tailnetName: String?, note: String?): Set<String> {
+            val out = LinkedHashSet<String>()
+            fun addHost(raw: String?) {
+                var h = raw?.trim()?.trimEnd('.')?.lowercase() ?: return
+                if (h.startsWith("[") && h.endsWith("]")) h = h.substring(1, h.length - 1)
+                if (h.isEmpty()) return
+                out.add(h)
+                if ('.' in h && !h[0].isDigit() && ':' !in h) out.add(h.substringBefore('.'))
+            }
+            normalizeEndpoint(endpoint ?: "")?.let { n ->
+                addHost(n.substringAfter('/').substringBeforeLast(':'))
+            }
+            addHost(tailnetName)
+            if (note != null) ipv4Labeled.findAll(note).forEach { addHost(it.groupValues[1]) }
+            return out
+        }
+
+        private fun unionAll(hosts: Set<String>) {
+            val list = hosts.toList()
+            if (list.size < 2) {
+                list.forEach { find(it) }
+                return
+            }
+            val root = find(list.first())
+            for (h in list.drop(1)) {
+                val r = find(h)
+                if (r != root) parent[r] = root
+            }
+        }
+
+        private fun find(h: String): String {
+            val cur = parent[h]
+            if (cur == null) {
+                parent[h] = h
+                return h
+            }
+            if (cur == h) return h
+            val r = find(cur)
+            parent[h] = r
+            return r
+        }
     }
 
     /**

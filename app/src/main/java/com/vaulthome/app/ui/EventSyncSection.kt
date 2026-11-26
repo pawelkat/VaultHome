@@ -43,6 +43,11 @@ import kotlinx.coroutines.async
 import androidx.compose.runtime.LaunchedEffect
 import com.vaulthome.app.events.label
 import com.vaulthome.events.LinkMode
+import kotlinx.coroutines.withContext
+import com.vaulthome.events.SharedEndpoints
+import com.vaulthome.events.SharedConfig
+import com.vaulthome.events.Disk
+import com.vaulthome.app.events.SafVaultTree
 
 private val Hint = Color(0xFF8A8A8A)
 
@@ -117,12 +122,33 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit, onRequestNotifications: () -
         color = Hint, style = MaterialTheme.typography.bodySmall,
     )
     val routers = EventSyncSettings.parseList(connect)
+    var shared by remember { mutableStateOf<SharedConfig?>(null) }
+    LaunchedEffect(useShared, writeGranted, svc.status.lastCatchUp, svc.running) {
+        if (!useShared) { shared = null; return@LaunchedEffect }
+        val tree = graph.store.treeUri()
+        if (tree == null) { shared = null; return@LaunchedEffect }
+        shared = withContext(Dispatchers.IO) {
+            SharedEndpoints.parse((SafVaultTree(ctx, tree).read(SharedEndpoints.PATH) as? Disk.Present)?.bytes)
+        }
+    }
+    val dialed = remember(routers, shared, useShared, device, mode, tailnet, listen) {
+        val self = draft.selfEntry()
+        if (!useShared) {
+            routers.mapNotNull { ep ->
+                SharedEndpoints.normalizeEndpoint(ep)?.let { SharedEndpoints.DialTarget(it, SharedEndpoints.DialSource.SETTINGS) }
+            }
+        } else {
+            SharedEndpoints.dialTargets(routers, shared, self)
+        }
+    }
+    val vaultRows = dialed.filter { it.source == SharedEndpoints.DialSource.VAULT }
+    val probeList = (routers + vaultRows.map { it.endpoint }).distinct()
     var reach by remember { mutableStateOf<Map<String, RouterListStatus.Reach>>(emptyMap()) }
-    LaunchedEffect(routers) {
-        reach = routers.associateWith { RouterListStatus.Reach.CHECKING }
+    LaunchedEffect(probeList) {
+        reach = probeList.associateWith { RouterListStatus.Reach.CHECKING }
         while (true) {
             val next = coroutineScope {
-                routers.map { ep ->
+                probeList.map { ep ->
                     async(Dispatchers.IO) {
                         ep to if (RouterProbe.tcpOpen(ep)) RouterListStatus.Reach.REACHABLE else RouterListStatus.Reach.UNREACHABLE
                     }
@@ -192,8 +218,43 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit, onRequestNotifications: () -
     }
     if (addProblem != null) Text(addProblem, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
     if (routers.isEmpty()) Text("The list is empty — add at least one router to connect in Client mode.", color = Hint, style = MaterialTheme.typography.bodySmall)
+    if (useShared && vaultRows.isNotEmpty()) {
+        Text("From vault", color = Ink)
+        Text(
+            "Also dialed from ${SharedEndpoints.PATH} (not in the list above). These are not editable here.",
+            color = Hint, style = MaterialTheme.typography.bodySmall,
+        )
+        vaultRows.forEach { row ->
+            val host = RouterListStatus.parse(row.endpoint)?.host
+            val title = buildString {
+                append("From vault")
+                row.id?.let { append(" · ").append(it) }
+                if (host != null && (row.id == null || RouterListStatus.shortName(host) != row.id)) {
+                    append(" · ").append(RouterListStatus.shortName(host))
+                }
+            }
+            OutlinedTextField(
+                value = row.endpoint,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text(title, color = Muted) },
+                supportingText = {
+                    Text(
+                        RouterListStatus.rowLabel(reach[row.endpoint]),
+                        color = when (reach[row.endpoint]) {
+                            RouterListStatus.Reach.REACHABLE -> Color(0xFF2E7D32)
+                            RouterListStatus.Reach.UNREACHABLE -> MaterialTheme.colorScheme.error
+                            else -> Hint
+                        },
+                    )
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column2("Use shared endpoint list", "Read and update ${com.vaulthome.events.SharedEndpoints.PATH} in the vault. Those routers are appended after the Zenoh router list above (this list stays first). Also writes this phone's entry (device, mode, listen, Tailscale name, last seen).", Modifier.weight(1f))
+        Column2("Use shared endpoint list", "Read and update ${SharedEndpoints.PATH} in the vault. Extra dialable routers from that file appear as “from vault” rows under the list you type (this list stays first; same host is kept once). Also writes this phone's entry (device, mode, listen, Tailscale name, last seen).", Modifier.weight(1f))
         Switch(checked = useShared, onCheckedChange = { useShared = it })
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -263,7 +324,7 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit, onRequestNotifications: () -
             useShared = true
         }) { Text("Defaults") }
     }
-    Text(RouterListStatus.statusLine(settings.enabled, svc, draft.connect), color = Ink, style = MaterialTheme.typography.bodySmall)
+    Text(RouterListStatus.statusLine(settings.enabled, svc, dialed.map { it.endpoint }, fromVault = vaultRows.size), color = Ink, style = MaterialTheme.typography.bodySmall)
     svc.status.lastEvent?.let { ev ->
         val at = svc.status.lastEventAtMs?.let { java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(it)) }
         Text("Last event: $ev${at?.let { " at $it" } ?: ""}", color = Hint, style = MaterialTheme.typography.bodySmall)

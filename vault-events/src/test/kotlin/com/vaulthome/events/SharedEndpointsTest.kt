@@ -79,4 +79,67 @@ class SharedEndpointsTest {
         assertTrue(list.none { it.contains("grokbot") || it.contains("pawels-s24-ultra") || it.contains("should-not-dial") })
         assertEquals(listOf("tcp/a:1"), SharedEndpoints.connectList(listOf("tcp/a:1"), null, s24))
     }
+
+    @Test
+    fun connectListDedupesVaultExtrasAndAliases() {
+        val self = DeviceEntry("s24", "VaultHome", LinkMode.CLIENT, tailnetName = "pawels-s24-ultra.tailf52603.ts.net")
+        val json = """
+            {"schemaVersion":1,
+             "routers":[
+               {"id":"note4c","endpoint":"tcp/n910c.tailf52603.ts.net:7447","tailnetName":"n910c.tailf52603.ts.net","dialable":true,
+                "note":"Always-on Zenoh router on note4c. MagicDNS is n910c. IPv4 100.79.23.65."},
+               {"id":"nitro5","endpoint":"tcp/nitro5.tailf52603.ts.net:7447","tailnetName":"nitro5.tailf52603.ts.net","dialable":true,
+                "note":"Nitro WSL. IPv4 100.79.193.105."},
+               {"id":"latitude","endpoint":"tcp/pawelk-latitude-5300.tailf52603.ts.net:7447","tailnetName":"pawelk-latitude-5300.tailf52603.ts.net","dialable":true},
+               {"id":"desktop-sdf3lgo","endpoint":"tcp/desktop-sdf3lgo.tailf52603.ts.net:7447","tailnetName":"desktop-sdf3lgo.tailf52603.ts.net","dialable":true},
+               {"id":"box","tailnetName":"grokbot-user-155710816.tailf52603.ts.net","dialable":false}
+             ],
+             "devices":{"s24":{"app":"VaultHome","mode":"client","listen":[],"tailnetName":"pawels-s24-ultra.tailf52603.ts.net"}}}
+        """.trimIndent().toByteArray()
+        val cfg = SharedEndpoints.parse(json)!!
+        val local = listOf("tcp/n910c.tailf52603.ts.net:7447", "tcp/nitro5.tailf52603.ts.net:7447")
+        val targets = SharedEndpoints.dialTargets(local, cfg, self)
+        assertEquals(
+            listOf(
+                "tcp/n910c.tailf52603.ts.net:7447",
+                "tcp/nitro5.tailf52603.ts.net:7447",
+                "tcp/pawelk-latitude-5300.tailf52603.ts.net:7447",
+                "tcp/desktop-sdf3lgo.tailf52603.ts.net:7447",
+            ),
+            targets.map { it.endpoint },
+        )
+        assertEquals(
+            listOf(SharedEndpoints.DialSource.SETTINGS, SharedEndpoints.DialSource.SETTINGS, SharedEndpoints.DialSource.VAULT, SharedEndpoints.DialSource.VAULT),
+            targets.map { it.source },
+        )
+        assertEquals(listOf(null, null, "latitude", "desktop-sdf3lgo"), targets.map { it.id })
+        // Same two Settings locators under another scheme/host spelling, plus the tailnet IPv4 of n910c.
+        val aliases = SharedEndpoints.dialTargets(
+            listOf("TCP/N910C.tailf52603.ts.net.:7447", "tcp/100.79.23.65:7447", "tcp/nitro5.tailf52603.ts.net:7447"),
+            cfg,
+            self,
+        )
+        assertEquals(
+            listOf(
+                "tcp/n910c.tailf52603.ts.net:7447",
+                "tcp/nitro5.tailf52603.ts.net:7447",
+                "tcp/pawelk-latitude-5300.tailf52603.ts.net:7447",
+                "tcp/desktop-sdf3lgo.tailf52603.ts.net:7447",
+            ),
+            aliases.map { it.endpoint },
+        )
+        assertEquals(2, aliases.count { it.source == SharedEndpoints.DialSource.VAULT })
+        assertEquals(local, SharedEndpoints.connectList(local, cfg, self).take(2))
+        assertTrue(SharedEndpoints.connectList(local, cfg, self).none { it.contains("grokbot") || it.contains("100.79.") })
+    }
+
+    @Test
+    fun normalizeEndpointStripsCaseDotAndParams() {
+        assertEquals(
+            "tcp/n910c.tailf52603.ts.net:7447",
+            SharedEndpoints.normalizeEndpoint(" TCP/N910C.tailf52603.ts.net.:7447#iface=tailscale0 "),
+        )
+        assertTrue(SharedEndpoints.isEndpoint("tcp/n910c.tailf52603.ts.net:7447"))
+        assertTrue(SharedEndpoints.isEndpoint("TCP/n910c.tailf52603.ts.net:7447"))
+    }
 }

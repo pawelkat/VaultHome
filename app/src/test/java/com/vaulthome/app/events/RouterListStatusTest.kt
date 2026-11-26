@@ -45,6 +45,10 @@ class RouterListStatusTest {
         assertEquals("1 of 1 router linked", RouterListStatus.linkedPhrase(LinkMode.CLIENT, 1, 1))
         assertEquals("2 of 2 routers linked", RouterListStatus.linkedPhrase(LinkMode.PEER, 2, 2))
         assertEquals("0 routers linked", RouterListStatus.linkedPhrase(LinkMode.CLIENT, 0, 0))
+        assertEquals(
+            "1 of 4 routers linked (2 from vault; client uses one at a time)",
+            RouterListStatus.linkedPhrase(LinkMode.CLIENT, 1, 4, fromVault = 2),
+        )
     }
 
     @Test
@@ -66,6 +70,9 @@ class RouterListStatusTest {
         assertFalse(line, line.contains("(") && line.contains("tcp/"))
         assertEquals("Status: off", RouterListStatus.statusLine(false, EventSyncState()))
         assertEquals("Status: not running", RouterListStatus.statusLine(true, EventSyncState(running = false)))
+        val withVault = st.copy(connect = listOf(n910c, nitro, "tcp/pawelk-latitude-5300.tailf52603.ts.net:7447", "tcp/desktop-sdf3lgo.tailf52603.ts.net:7447"))
+        val line4 = RouterListStatus.statusLine(true, EventSyncState(running = true, status = withVault, fromVault = 2))
+        assertTrue(line4, line4.contains("1 of 4 routers linked (2 from vault; client uses one at a time)"))
     }
 
     @Test
