@@ -108,6 +108,41 @@ class ZenohLink private constructor(private val session: Session, private val de
         return AutoCloseable { runCatching { sub.close() } }
     }
 
+    private val livelinessSubs = ArrayList<AutoCloseable>()
+
+    override fun subscribeLiveliness(keyExpr: String, onChange: (String, Boolean) -> Unit): AutoCloseable? {
+        val ke = KeyExpr.tryFrom(keyExpr).getOrThrow()
+        val sub = session.liveliness().declareSubscriber(
+            ke,
+            Callback<Sample> { s -> onChange(s.keyExpr.toString(), s.kind == SampleKind.PUT) },
+            history = true,
+        ).getOrThrow()
+        val handle = AutoCloseable { runCatching { sub.close() } }
+        synchronized(livelinessSubs) { livelinessSubs.add(handle) }
+        return handle
+    }
+
+    override fun call(selector: String, payload: String?, timeoutMs: Long): String? {
+        val out = AtomicReference<String?>(null)
+        val done = CountDownLatch(1)
+        val sel = if (device.isBlank()) Selector.tryFrom(selector).getOrThrow()
+        else Selector.tryFrom(Requester.withFrom(selector, device)).getOrThrow()
+        session.get(
+            sel,
+            callback = Callback<Reply> { r ->
+                val text = r.result.fold({ it.payload.toString() }, { "{\"ok\":false,\"error\":\"${it.message ?: "reply error"}\"}" })
+                if (out.compareAndSet(null, text)) done.countDown()
+            },
+            payload = payload?.let { ZBytes.from(it) },
+            timeout = Duration.ofMillis(timeoutMs),
+            target = QueryTarget.ALL,
+            consolidation = ConsolidationMode.NONE,
+            onClose = { done.countDown() },
+        ).getOrThrow()
+        done.await(timeoutMs + 1_000, TimeUnit.MILLISECONDS)
+        return out.get()
+    }
+
     override fun serveBlobs(
         device: String,
         provider: (String, Long, Long) -> ByteArray?,
@@ -183,6 +218,7 @@ class ZenohLink private constructor(private val session: Session, private val de
         sweeper = null
         runCatching { hubPresenceSub?.close() }
         hubPresenceSub = null
+        synchronized(livelinessSubs) { livelinessSubs.forEach { runCatching { it.close() } }; livelinessSubs.clear() }
         runCatching { presenceToken?.close() }
         presenceToken = null
         runCatching { presenceQueryable?.close() }

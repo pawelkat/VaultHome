@@ -68,6 +68,10 @@ class SyncEngine(
     private val onConnected: (SyncCore) -> Unit = {},
     /** "Synced notes" to post: remote changes only, grouped per [SyncNotices.plan]. Called on the worker. */
     private val onNotices: (List<Notice>) -> Unit = {},
+    /** Liveliness keys to watch on every session (e.g. `devices/towerx-power`, `vault/presence/towerx`). */
+    private val watchTokens: List<String> = emptyList(),
+    /** `(key, alive)` for [watchTokens]; every key is reported `false` when the session closes. Transport thread. */
+    private val onToken: (String, Boolean) -> Unit = { _, _ -> },
 ) {
     init {
         core.log = log
@@ -89,7 +93,7 @@ class SyncEngine(
     private val fetching = HashSet<String>()
     private val partialDir: File = options.partialDir
         ?: File(System.getProperty("java.io.tmpdir"), "vault-events-partial-${core.device.filter { it.isLetterOrDigit() }}")
-    private var link: EventLink? = null
+    @Volatile private var link: EventLink? = null
     private var linked = 0
     private val hubPresent = AtomicBoolean(false)
     private var sessionReady = false
@@ -121,6 +125,9 @@ class SyncEngine(
         }
     }
 
+    /** Query [selector] on the current session from the caller's thread; `null` = not connected or no reply. */
+    fun call(selector: String, payload: String?, timeoutMs: Long): String? = link?.call(selector, payload, timeoutMs)
+
     fun catchUpNow() = worker.execute { guarded("catch-up") { catchUpOrSchedule() } }
 
     fun stop() {
@@ -131,6 +138,7 @@ class SyncEngine(
             runCatching { core.saveIfDirty() }
             runCatching { link?.close() }
             link = null
+            watchTokens.forEach { runCatching { onToken(it, false) } }
             transfers.shutdownNow()
             update { it.copy(phase = EngineStatus.Phase.STOPPED, routers = 0, peers = 0) }
         }
@@ -176,6 +184,13 @@ class SyncEngine(
             }
         } catch (e: Throwable) {
             log("hub presence subscribe failed: $e")
+        }
+        for (k in watchTokens) {
+            try {
+                l.subscribeLiveliness(k, onToken)
+            } catch (e: Throwable) {
+                log("liveliness $k subscribe failed: $e")
+            }
         }
         if (options.hubWaitMs > 0 && !hubPresent.get()) {
             val t0 = System.currentTimeMillis()

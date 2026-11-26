@@ -34,10 +34,51 @@ class AskOrchestratorTest {
 
     private fun orchestrator(
         nitro: NitroGateway,
-        settings: AskSettings = AskSettings(),
+        settings: AskSettings = AskSettings(towerxEnabled = false),
         search: suspend (String) -> List<SearchHit> = { hits },
         local: AnswerEngine = LocalAnswerEngineStub,
     ) = AskOrchestrator(nitro, { settings }, search, local)
+
+    /** Health and chat per base URL: TowerX vs Nitro. */
+    private class TwoHosts(val towerx: Health, val nitro: Health = Health.Ok) : NitroGateway {
+        val asked = mutableListOf<String>()
+        override suspend fun health(baseUrl: String) = if (baseUrl == AskSettings.DEFAULT_TOWERX_URL) towerx else nitro
+        override suspend fun chat(baseUrl: String, messages: List<ChatMessage>): ChatReply {
+            asked += baseUrl
+            return ChatReply(if (baseUrl == AskSettings.DEFAULT_TOWERX_URL) "from towerx" else "from nitro", "qwen")
+        }
+    }
+
+    private fun withTowerX(gw: NitroGateway, agent: Boolean?, health: MutableList<Boolean> = mutableListOf()) =
+        AskOrchestrator(gw, { AskSettings() }, { hits }, towerxAgentAlive = { agent }, onTowerXHealth = { ok, _ -> health += ok })
+
+    @Test fun towerxAliveAndHealthyAnswers() = runBlocking {
+        val gw = TwoHosts(Health.Ok)
+        val health = mutableListOf<Boolean>()
+        val out = withTowerX(gw, agent = true, health).ask("q") as AskOutcome.Nitro
+        assertEquals("TowerX", out.host)
+        assertEquals("from towerx", out.answer)
+        assertEquals(listOf(true), health)
+    }
+
+    @Test fun towerxUnhealthyFallsBackToNitro() = runBlocking {
+        val gw = TwoHosts(Health.Loading("vault_searchd down"))
+        val out = withTowerX(gw, agent = true).ask("q") as AskOutcome.Nitro
+        assertEquals("Nitro", out.host)
+        assertEquals(listOf(AskSettings.DEFAULT_NITRO_URL), gw.asked)
+    }
+
+    @Test fun towerxOfflineInZenohIsNotTried() = runBlocking {
+        val gw = TwoHosts(Health.Ok)
+        val out = withTowerX(gw, agent = false).ask("q") as AskOutcome.Nitro
+        assertEquals("Nitro", out.host)
+        assertEquals(listOf(AskSettings.DEFAULT_NITRO_URL), gw.asked)
+    }
+
+    @Test fun noZenohSessionHealthDecides() = runBlocking {
+        val out = withTowerX(TwoHosts(Health.Ok), agent = null).ask("q") as AskOutcome.Nitro
+        assertEquals("TowerX", out.host)
+    }
 
     @Test fun nitroUpAnswersWithoutLocalCitations() = runBlocking {
         val nitro = FakeNitro()
@@ -62,7 +103,7 @@ class AskOrchestratorTest {
 
     @Test fun nitroDisabledSkipsHealthAndFallsBackToHits() = runBlocking {
         val nitro = FakeNitro()
-        val out = orchestrator(nitro, AskSettings(nitroEnabled = false)).ask("watch?")
+        val out = orchestrator(nitro, AskSettings(nitroEnabled = false, towerxEnabled = false)).ask("watch?")
         out as AskOutcome.SearchOnly
         assertEquals(NitroSkip.Disabled, out.nitro)
         assertEquals(0, nitro.healthCalls)

@@ -17,7 +17,7 @@ object AskMarkdown {
 
     /** One-line source label, also used as the panel badge. */
     fun sourceLabel(outcome: AskOutcome): String = when (outcome) {
-        is AskOutcome.Nitro -> "Nitro" + (shortModel(outcome.model)?.let { " · $it" } ?: "")
+        is AskOutcome.Nitro -> outcome.host + (shortModel(outcome.model)?.let { " · $it" } ?: "")
         is AskOutcome.Local -> "On-device"
         is AskOutcome.SearchOnly -> "Matching notes"
     }

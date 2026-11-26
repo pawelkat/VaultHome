@@ -21,16 +21,22 @@ data class AskSettings(
     val nitroEnabled: Boolean = true,
     val nitroBaseUrl: String = DEFAULT_NITRO_URL,
     val askMode: Boolean = false,
+    /** Try TowerX first when its Zenoh agent is alive and its chat proxy /health is OK (llama-server + vault-searchd). */
+    val towerxEnabled: Boolean = true,
+    val towerxBaseUrl: String = DEFAULT_TOWERX_URL,
 ) {
     /** The search bar is in Ask mode only when Ask is enabled and the switch is on Ask. */
     val askActive: Boolean get() = askEnabled && askMode
 
     /** Where an Ask is sent first, for the remote/local badge next to the switch. */
-    val target: AskTarget get() = if (nitroEnabled) AskTarget.Remote else AskTarget.Local
+    val target: AskTarget get() = if (nitroEnabled || towerxEnabled) AskTarget.Remote else AskTarget.Local
 
     companion object {
         /** Chat proxy on the home LAN (llama-server itself stays on 8080 behind it). */
         const val DEFAULT_NITRO_URL = "http://192.168.1.18:8082"
+
+        /** TowerX chat proxy (`qwen-chat-proxy` :8082, `System/TowerX Qwen.md`) via Tailscale Serve. */
+        const val DEFAULT_TOWERX_URL = "https://towerx.tailf52603.ts.net"
 
         /** Same chat proxy via Tailscale Serve (HTTPS, so no cleartext exception needed). */
         const val TAILSCALE_NITRO_URL = "https://nitro5.tailf52603.ts.net"
@@ -59,8 +65,8 @@ enum class AskTarget { Remote, Local }
 
 /** Text of the small remote/local badge shown next to the top-bar switch in Ask mode. */
 object AskBadge {
-    fun label(target: AskTarget): String = when (target) {
-        AskTarget.Remote -> "Remote · Nitro"
+    fun label(target: AskTarget, host: String = "Nitro"): String = when (target) {
+        AskTarget.Remote -> "Remote · $host"
         AskTarget.Local -> "Local · on-device"
     }
 }
@@ -75,6 +81,8 @@ class AskSettingsStore(context: Context) {
         nitroEnabled = prefs.getBoolean(KEY_NITRO, true),
         nitroBaseUrl = AskSettings.migrateStoredUrl(prefs.getString(KEY_URL, null)),
         askMode = prefs.getBoolean(KEY_MODE, false),
+        towerxEnabled = prefs.getBoolean(KEY_TOWERX, true),
+        towerxBaseUrl = prefs.getString(KEY_TOWERX_URL, null) ?: AskSettings.DEFAULT_TOWERX_URL,
     )
 
     fun update(transform: (AskSettings) -> AskSettings) {
@@ -85,6 +93,8 @@ class AskSettingsStore(context: Context) {
             .putString(KEY_URL, next.nitroBaseUrl)
             .remove(KEY_GROUND) // retired: Ask no longer sends local hits to Nitro
             .putBoolean(KEY_MODE, next.askMode)
+            .putBoolean(KEY_TOWERX, next.towerxEnabled)
+            .putString(KEY_TOWERX_URL, next.towerxBaseUrl)
             .apply()
         flow.value = next
     }
@@ -95,5 +105,7 @@ class AskSettingsStore(context: Context) {
         const val KEY_URL = "nitro_base_url"
         const val KEY_GROUND = "nitro_ground_with_hits"
         const val KEY_MODE = "search_bar_ask_mode"
+        const val KEY_TOWERX = "towerx_enabled"
+        const val KEY_TOWERX_URL = "towerx_base_url"
     }
 }

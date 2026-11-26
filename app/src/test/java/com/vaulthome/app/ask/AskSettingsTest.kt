@@ -35,7 +35,7 @@ class AskSettingsTest {
         assertEquals(true, AskSettings(askMode = true).askActive)
         assertEquals(false, AskSettings(askEnabled = false, askMode = true).askActive)
         assertEquals(AskTarget.Remote, AskSettings().target)
-        assertEquals(AskTarget.Local, AskSettings(nitroEnabled = false).target)
+        assertEquals(AskTarget.Local, AskSettings(nitroEnabled = false, towerxEnabled = false).target)
     }
 
     @Test fun topBarBadgeLabels() {
