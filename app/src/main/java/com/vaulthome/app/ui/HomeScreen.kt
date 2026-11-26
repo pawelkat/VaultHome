@@ -24,6 +24,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,7 +75,7 @@ fun HomeScreen(
         loading = false
     }
     val actions: @Composable RowScope.() -> Unit = { ReindexAction(viewModel, onIndex) }
-    val topBar: @Composable RowScope.() -> Unit = { SettingsAction(onSettings) }
+    val topBar: @Composable RowScope.() -> Unit = { DevicesAction(); SettingsAction(onSettings) }
     var opened by rememberSaveable { mutableStateOf<String?>(null) }
     val path = daily ?: opened
     if (requestedNote != null) {
@@ -103,6 +106,30 @@ fun ReindexAction(viewModel: VaultHomeViewModel, onIndex: () -> Unit) {
         else Icon(Icons.Filled.Refresh, contentDescription = "Reindex vault", tint = Color(0xFFB0B0B0))
     }
 }
+
+@Composable
+fun DevicesAction() {
+    IconButton(onClick = { com.vaulthome.app.devices.DevicesNav.show() }, modifier = Modifier.size(32.dp)) {
+        Icon(DevicesIcon, contentDescription = "Devices", tint = Color(0xFFB0B0B0), modifier = Modifier.size(20.dp))
+    }
+}
+
+/** Material Devices icon, inlined so we don't pull in material-icons-extended. */
+private val DevicesIcon: ImageVector = ImageVector.Builder(
+    name = "Devices", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f,
+).apply {
+    path(fill = SolidColor(Color.Black)) {
+        moveTo(4f, 6f); horizontalLineToRelative(18f); verticalLineTo(4f); horizontalLineTo(4f)
+        curveToRelative(-1.1f, 0f, -2f, 0.9f, -2f, 2f); verticalLineToRelative(11f); horizontalLineTo(0f); verticalLineToRelative(3f)
+        horizontalLineToRelative(14f); verticalLineToRelative(-3f); horizontalLineTo(4f); verticalLineTo(6f); close()
+        moveTo(23f, 8f); horizontalLineToRelative(-6f)
+        curveToRelative(-0.55f, 0f, -1f, 0.45f, -1f, 1f); verticalLineToRelative(10f)
+        curveToRelative(0f, 0.55f, 0.45f, 1f, 1f, 1f); horizontalLineToRelative(6f)
+        curveToRelative(0.55f, 0f, 1f, -0.45f, 1f, -1f); verticalLineTo(9f)
+        curveToRelative(0f, -0.55f, -0.45f, -1f, -1f, -1f); close()
+        moveTo(22f, 17f); horizontalLineToRelative(-4f); verticalLineToRelative(-7f); horizontalLineToRelative(4f); verticalLineToRelative(7f); close()
+    }
+}.build()
 
 @Composable
 fun SettingsAction(onSettings: () -> Unit) {

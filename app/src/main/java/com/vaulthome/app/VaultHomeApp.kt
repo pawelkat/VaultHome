@@ -65,6 +65,7 @@ class AppGraph(app: Application) {
     val searcher = Searcher(database.chunks(), embedder)
     val askSettings = com.vaulthome.app.ask.AskSettingsStore(app)
     val queryHistory = com.vaulthome.app.search.QueryHistoryStore(app, com.vaulthome.app.events.SafHistoryFile(app, store))
+    val deviceRegistry = com.vaulthome.app.devices.DeviceRegistryStore(app, store)
     val nitro = com.vaulthome.app.ask.NitroClient()
     val x4Settings = com.vaulthome.app.x4.X4SettingsStore(app)
     val eventSync = com.vaulthome.app.events.EventSyncSettingsStore(app)

@@ -154,54 +154,20 @@ private fun TowerXSection() {
     val graph = (ctx.applicationContext as com.vaulthome.app.VaultHomeApp).graph
     val store = graph.askSettings
     val ask by store.state.collectAsStateWithLifecycle()
-    val tx by com.vaulthome.app.towerx.TowerXMonitor.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf(ask.towerxBaseUrl) }
-    var confirmOff by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf("") }
     fun check() {
+        testResult = "Testing…"
         scope.launch {
-            val h = graph.nitro.health(store.state.value.towerxBaseUrl)
-            com.vaulthome.app.towerx.TowerXMonitor.onHealth(
-                h == com.vaulthome.app.ask.Health.Ok,
-                when (h) {
-                    com.vaulthome.app.ask.Health.Ok -> "llama-server + vault-searchd up"
-                    is com.vaulthome.app.ask.Health.Loading -> h.detail.take(160)
-                    is com.vaulthome.app.ask.Health.Down -> h.reason
-                },
-            )
-            if (com.vaulthome.app.towerx.TowerXMonitor.state.value.espAlive == true) com.vaulthome.app.towerx.TowerXMonitor.power(com.vaulthome.app.towerx.PowerAction.Status)
+            testResult = when (val h = graph.nitro.health(store.state.value.towerxBaseUrl)) {
+                com.vaulthome.app.ask.Health.Ok -> "OK: llama-server + vault-searchd up"
+                is com.vaulthome.app.ask.Health.Loading -> "Not ready: " + h.detail.take(160)
+                is com.vaulthome.app.ask.Health.Down -> "Down: " + h.reason
+            }
         }
     }
-    LaunchedEffect(Unit) { check() }
-    fun mark(v: Boolean?, on: String, off: String) = when (v) { true -> "● $on"; false -> "○ $off"; null -> "? unknown" }
     Text("TowerX", style = MaterialTheme.typography.titleMedium, color = Ink)
-    Text("ESP32 power board: " + mark(tx.espAlive, "online", "offline"), color = Ink)
-    Text("TowerX agent: " + mark(tx.agentAlive, "online", "offline"), color = Ink)
-    Text("vault-searchd + LLM: " + mark(tx.healthOk, "healthy", "down") + if (tx.healthDetail.isNotBlank()) " · ${tx.healthDetail}" else "", color = Ink)
-    Text(if (tx.askAvailable) "Ask uses TowerX" else "Ask falls back (Nitro / on-device)", color = if (tx.askAvailable) Color(0xFF5CC489) else Muted)
-    if (tx.espAlive == null) Text("Turn on Event sync to see Zenoh state and use power.", color = Muted, style = MaterialTheme.typography.bodySmall)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(enabled = !tx.busy, onClick = { check() }) { Text("Check") }
-        OutlinedButton(enabled = !tx.busy && tx.espAlive == true, onClick = {
-            scope.launch { com.vaulthome.app.towerx.TowerXMonitor.power(com.vaulthome.app.towerx.PowerAction.On) }
-        }) { Text("Turn on") }
-        OutlinedButton(enabled = !tx.busy && tx.espAlive == true, onClick = { confirmOff = true }) { Text("Force off") }
-    }
-    if (tx.lastReply.isNotBlank()) Text(tx.lastReply, color = Muted, style = MaterialTheme.typography.bodySmall)
-    if (confirmOff) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { confirmOff = false },
-            title = { Text("Force off TowerX?") },
-            text = { Text("Holds the power button for 6 s. Unsaved work on TowerX is lost.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmOff = false
-                    scope.launch { com.vaulthome.app.towerx.TowerXMonitor.power(com.vaulthome.app.towerx.PowerAction.Off, confirmed = true) }
-                }) { Text("Force off") }
-            },
-            dismissButton = { TextButton(onClick = { confirmOff = false }) { Text("Cancel") } },
-        )
-    }
     SwitchRow("Use TowerX for Ask", ask.towerxEnabled) { v -> store.update { it.copy(towerxEnabled = v) } }
     OutlinedTextField(
         value = url,
@@ -214,10 +180,11 @@ private fun TowerXSection() {
             store.update { it.copy(towerxBaseUrl = com.vaulthome.app.ask.AskSettings.normalizeBaseUrl(url)) }; url = store.state.value.towerxBaseUrl
         }),
     )
-    Text(
-        "Power goes over Zenoh to the note4c bridge (devices/towerx-power). After a pulse the board ignores another for 45 s.",
-        color = Muted, style = MaterialTheme.typography.bodySmall,
-    )
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = { check() }) { Text("Test /health") }
+        OutlinedButton(onClick = { com.vaulthome.app.devices.DevicesNav.show() }) { Text("Device status → Devices") }
+    }
+    if (testResult.isNotBlank()) Text(testResult, color = Muted, style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable

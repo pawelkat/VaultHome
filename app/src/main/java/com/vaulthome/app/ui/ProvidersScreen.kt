@@ -132,5 +132,6 @@ fun ProvidersScreen(onBack: () -> Unit) {
         }
         ps.errors.forEach { (d, e) -> Text("$d caps: $e", color = Muted, style = MaterialTheme.typography.bodySmall) }
         Text("URLs and on/off switches per host stay in Settings.", color = Muted, style = MaterialTheme.typography.bodySmall)
+        OutlinedButton(onClick = { com.vaulthome.app.devices.DevicesNav.show() }) { Text("Devices: status and power") }
     }
 }

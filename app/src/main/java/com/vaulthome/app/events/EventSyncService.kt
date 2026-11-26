@@ -132,6 +132,7 @@ class EventSyncService : Service() {
                 // The sync just applied these notes: embed them now (debounced); another device's history.json is merged in.
                 g.eventReindexer.onVaultChanged(changed)
                 if (com.vaulthome.app.search.QueryHistory.VAULT_PATH in changed) g.queryHistory.sync()
+                if (com.vaulthome.app.devices.DeviceRegistryJson.VAULT_PATH in changed) g.deviceRegistry.reload()
             },
             log = { Log.i(TAG, it) },
             // Shared endpoint list in the vault: read before each connect, self entry merged after the first catch-up
@@ -143,6 +144,7 @@ class EventSyncService : Service() {
                 // Caught up with the hub: one incremental pass picks up anything the live events did not list.
                 g.eventReindexer.requestFull()
                 g.queryHistory.sync()
+                g.deviceRegistry.reload()
                 if (settings.useSharedEndpoints) {
                     val disk = fs.read(SharedEndpoints.PATH)
                     if (disk !is Disk.Skipped) {
