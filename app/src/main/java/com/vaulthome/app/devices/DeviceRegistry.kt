@@ -1,6 +1,5 @@
 package com.vaulthome.app.devices
 
-import com.vaulthome.app.ask.AskSettings
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -143,23 +142,19 @@ object DeviceRegistryJson {
     }
 
     /**
-     * Today's hardcoded values, used to seed the vault file (only when it is missing) and as the last-resort fallback:
-     * Nitro5 (LAN + tailnet chat proxy), TowerX (tailnet chat proxy, ESP32 power via the note4c bridge), and the
-     * `towerx-power` board, which is only reachable as Zenoh liveliness `devices/towerx-power`.
+     * Built-in device list, used to seed the vault file (only when it is missing) and as the last-resort fallback.
+     * No chat-proxy URLs are baked in: [com.vaulthome.app.ask.DeviceUrls] derives `https://<id>.<tailnet-suffix>`.
+     * A later devices.json may add `endpoints` or `chat_proxy` to override, including a `lan` URL to try.
      */
     fun bundled(): DeviceRegistry = DeviceRegistry(
         VERSION,
         listOf(
             RegDevice(
                 id = "nitro5", name = "Nitro 5", kind = RegDevice.KIND_PC,
-                endpoints = mapOf("lan" to AskSettings.DEFAULT_NITRO_URL, "tailnet" to AskSettings.TAILSCALE_NITRO_URL),
-                chatProxy = AskSettings.TAILSCALE_NITRO_URL,
-                note = "Chat proxy :8082 (LAN needs BIND=0.0.0.0); sleeps when the lid closes.",
+                note = "Chat proxy via Tailscale Serve; sleeps when the lid closes.",
             ),
             RegDevice(
                 id = "towerx", name = "TowerX", kind = RegDevice.KIND_PC,
-                endpoints = mapOf("tailnet" to AskSettings.DEFAULT_TOWERX_URL),
-                chatProxy = AskSettings.DEFAULT_TOWERX_URL,
                 power = PowerDescriptor(
                     controller = "towerx-power", key = "devices/towerx-power",
                     actions = listOf("on", "off", "status"), cooldownS = 45, confirm = listOf("off"), forceOffHoldS = 6,

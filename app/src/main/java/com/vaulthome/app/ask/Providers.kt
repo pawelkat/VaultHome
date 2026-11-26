@@ -28,13 +28,18 @@ data class Provider(
     val ready: Boolean,
     val nCtx: Int?,
     val maxTokensSuggest: Int?,
-    /** True when synthesised from Settings URLs (no manifest seen); readiness is then decided by `/health`. */
+    /** True when synthesised from the registry / derived tailnet URL (no manifest seen); readiness is then decided by `/health`. */
     val fromSettings: Boolean = false,
+    /** LAN chat-proxy URL from devices.json `endpoints.lan`, if any; never a hardcoded address. Tried after [baseUrl]. */
+    val lanUrl: String? = null,
 ) {
     val isChat: Boolean get() = kind == KIND_CHAT && transport == TRANSPORT_PROXY
 
     /** Chat proxy root: the manifest endpoint without `/v1/chat/completions`. */
     val baseUrl: String get() = AskSettings.normalizeBaseUrl(endpoint.removeSuffix("/").removeSuffix("/chat/completions"))
+
+    /** URLs to probe and call: tailnet/manifest first, then a registry lan endpoint if one was listed. */
+    fun urls(): List<String> = listOf(baseUrl) + listOfNotNull(lanUrl?.takeIf { it != baseUrl })
 
     /** Short host name for badges and the answer header. */
     val hostLabel: String get() = when (device) {
@@ -171,21 +176,39 @@ object ProviderRouting {
     const val NITRO_PROVIDER_ID = "nitro5-qwen"
     const val TOWERX_PROVIDER_ID = "towerx-qwen"
 
-    /** Providers from the Settings URLs: used for a device until a manifest for it arrives. */
-    fun fromSettings(s: AskSettings): List<Provider> = listOf(
-        legacy(NITRO_DEVICE, NITRO_PROVIDER_ID, "Nitro chat proxy", s.nitroBaseUrl),
-        legacy(TOWERX_DEVICE, TOWERX_PROVIDER_ID, "TowerX chat proxy", s.towerxBaseUrl),
-    )
+    /**
+     * Chat providers from [devices] (kind `pc`, a chat_proxy, or lan/tailnet endpoints) until a caps manifest
+     * arrives for that device. URLs come from [DeviceUrls], not from stored Settings prefs.
+     */
+    fun fromRegistry(
+        devices: List<com.vaulthome.app.devices.RegDevice>,
+        suffix: String = TailnetUrls.FALLBACK_SUFFIX,
+    ): List<Provider> = devices.filter(DeviceUrls::isChatHost).map { d ->
+        val urls = DeviceUrls.resolve(d.id, suffix, d)
+        val title = if (d.id == NITRO_DEVICE) "Nitro chat proxy" else if (d.id == TOWERX_DEVICE) "TowerX chat proxy" else "${d.name} chat proxy"
+        val id = when (d.id) {
+            NITRO_DEVICE -> NITRO_PROVIDER_ID
+            TOWERX_DEVICE -> TOWERX_PROVIDER_ID
+            else -> "${d.id}-qwen"
+        }
+        Provider(
+            id = id, device = d.id, kind = Provider.KIND_CHAT, title = title,
+            description = "From ${urls.source.name.lowercase()} URL (no caps manifest yet)",
+            skills = listOf(Skills.VAULT), endpoint = "${urls.primary}/v1/chat/completions",
+            transport = Provider.TRANSPORT_PROXY, scope = "tailnet", access = "read-only",
+            ready = true, nCtx = null, maxTokensSuggest = null, fromSettings = true, lanUrl = urls.lan,
+        )
+    }
 
-    private fun legacy(device: String, id: String, title: String, url: String) = Provider(
-        id = id, device = device, kind = Provider.KIND_CHAT, title = title, description = "From Settings (no caps manifest yet)",
-        skills = listOf(Skills.VAULT), endpoint = "$url/v1/chat/completions", transport = Provider.TRANSPORT_PROXY,
-        scope = "tailnet", access = "read-only", ready = true, nCtx = null, maxTokensSuggest = null, fromSettings = true,
-    )
-
-    /** Manifest providers win per device; Settings fill devices without a manifest; the on-device index is always listed. */
-    fun all(manifests: Map<String, List<Provider>>, s: AskSettings, localDevice: String = "s24"): List<Provider> {
-        val settings = fromSettings(s).filter { it.device !in manifests }
+    /** Manifest providers win per device; the registry fills devices without a manifest; the on-device index is always listed. */
+    fun all(
+        manifests: Map<String, List<Provider>>,
+        s: AskSettings = AskSettings(),
+        localDevice: String = "s24",
+        registry: List<com.vaulthome.app.devices.RegDevice> = com.vaulthome.app.devices.DeviceRegistryJson.bundled().devices,
+        suffix: String = TailnetUrls.FALLBACK_SUFFIX,
+    ): List<Provider> {
+        val settings = fromRegistry(registry, suffix).filter { it.device !in manifests }
         val localGemma = Provider(
             id = "$localDevice-gemma", device = localDevice, kind = Provider.KIND_EMBEDDING, title = "Local EmbeddingGemma index",
             description = "On-device embedding search only", skills = listOf(Skills.SEARCH), endpoint = "local", transport = "local-index",

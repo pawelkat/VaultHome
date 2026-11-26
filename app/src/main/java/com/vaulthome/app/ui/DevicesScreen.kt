@@ -58,6 +58,8 @@ fun DevicesScreen(onBack: () -> Unit) {
     val ctx = LocalContext.current
     val graph = (ctx.applicationContext as VaultHomeApp).graph
     val loaded by graph.deviceRegistry.state.collectAsStateWithLifecycle()
+    val ev by graph.eventSync.state.collectAsStateWithLifecycle()
+    val suffix = com.vaulthome.app.ask.TailnetUrls.suffix(ev.connect)
     val ps by ProviderMonitor.state.collectAsStateWithLifecycle()
     val health by ProviderHealth.state.collectAsStateWithLifecycle()
     val tx by TowerXMonitor.state.collectAsStateWithLifecycle()
@@ -68,9 +70,9 @@ fun DevicesScreen(onBack: () -> Unit) {
 
     // Re-read the vault file, then probe /health on open and every few seconds while the page is shown.
     LaunchedEffect(Unit) { graph.deviceRegistry.reload() }
-    LaunchedEffect(loaded.registry) {
+    LaunchedEffect(loaded.registry, suffix) {
         while (true) {
-            DeviceProbe.probe(graph.nitro, loaded.registry.devices) { id, ok, detail ->
+            DeviceProbe.probe(graph.nitro, loaded.registry.devices, suffix) { id, ok, detail ->
                 ProviderHealth.report(id, ok, detail)
                 if (id == ProviderRouting.TOWERX_DEVICE) TowerXMonitor.onHealth(ok, detail)
             }
@@ -100,14 +102,21 @@ fun DevicesScreen(onBack: () -> Unit) {
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("${d.name} · ${d.kind}", style = MaterialTheme.typography.titleMedium, color = ink)
                 val sample = health[d.id]
+                val resolved = if (com.vaulthome.app.ask.DeviceUrls.isChatHost(d) || d.kind == RegDevice.KIND_PC)
+                    com.vaulthome.app.ask.DeviceUrls.resolve(d.id, suffix, d) else null
                 val status = buildList {
                     add(l.label)
                     add("last seen " + LastSeen.text(seen[d.id], now, l))
-                    if (d.chatProxy != null && sample != null && !sample.ok) add(sample.detail.take(80))
+                    if (resolved != null && sample != null && !sample.ok) add(sample.detail.take(80))
                 }.joinToString(" · ")
                 Text(status, color = if (l == Live.Online) Green else Muted, style = MaterialTheme.typography.bodySmall)
-                d.endpoints.forEach { (k, v) -> Text("$k  $v", color = Muted, style = MaterialTheme.typography.bodySmall) }
-                d.chatProxy?.let { Text("chat proxy  $it", color = Muted, style = MaterialTheme.typography.bodySmall) }
+                resolved?.let { r ->
+                    Text("chat proxy  ${r.primary}" + if (r.source == com.vaulthome.app.ask.UrlSource.Derived) " (derived)" else " (${r.source.name.lowercase()})", color = Muted, style = MaterialTheme.typography.bodySmall)
+                    r.lan?.let { Text("lan  $it", color = Muted, style = MaterialTheme.typography.bodySmall) }
+                }
+                d.endpoints.filter { (k, _) -> k != "lan" && k != "tailnet" }.forEach { (k, v) ->
+                    Text("$k  $v", color = Muted, style = MaterialTheme.typography.bodySmall)
+                }
                 d.liveliness?.let { Text("Zenoh  $it", color = Muted, style = MaterialTheme.typography.bodySmall) }
                 d.via?.let { Text("via  $it", color = Muted, style = MaterialTheme.typography.bodySmall) }
                 d.note?.let { Text(it, color = Muted, style = MaterialTheme.typography.bodySmall) }

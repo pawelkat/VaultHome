@@ -120,7 +120,6 @@ class MainActivity : ComponentActivity() {
                         onGrantVaultWrite = pickVaultTreeWritable,
                         onRequestNotifications = requestSyncNotifications,
                         onBack = { showSettings = false },
-                        askViewModel = askViewModel,
                     )
                     else -> holder.SaveableStateProvider("home") {
                         HomeScreen(

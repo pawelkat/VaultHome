@@ -1,6 +1,5 @@
 package com.vaulthome.app.devices
 
-import com.vaulthome.app.ask.AskSettings
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -75,13 +74,14 @@ class DeviceRegistryTest {
         assertEquals(bundled, DeviceRegistryJson.parse(DeviceRegistryJson.encode(bundled)).getOrThrow())
     }
 
-    @Test fun bundledHasTodaysHardcodedValues() {
+    @Test fun bundledListsHostsWithoutBakedInUrls() {
         val nitro = bundled.byId("nitro5")!!
-        assertEquals(AskSettings.DEFAULT_NITRO_URL, nitro.endpoints["lan"])
-        assertEquals("http://192.168.1.18:8082", nitro.endpoints["lan"])
-        assertEquals("https://nitro5.tailf52603.ts.net", nitro.endpoints["tailnet"])
+        assertEquals(RegDevice.KIND_PC, nitro.kind)
+        assertTrue(nitro.endpoints.isEmpty())
+        assertEquals(null, nitro.chatProxy)
         val tx = bundled.byId("towerx")!!
-        assertEquals(AskSettings.DEFAULT_TOWERX_URL, tx.chatProxy)
+        assertEquals(null, tx.chatProxy)
+        assertTrue(tx.endpoints.isEmpty())
         val p = tx.power!!
         assertEquals("devices/towerx-power", p.key)
         assertEquals(45, p.cooldownS)

@@ -50,6 +50,9 @@ fun ProvidersScreen(onBack: () -> Unit) {
     val graph = (ctx.applicationContext as VaultHomeApp).graph
     val store = graph.askSettings
     val ask by store.state.collectAsStateWithLifecycle()
+    val loaded by graph.deviceRegistry.state.collectAsStateWithLifecycle()
+    val ev by graph.eventSync.state.collectAsStateWithLifecycle()
+    val suffix = com.vaulthome.app.ask.TailnetUrls.suffix(ev.connect)
     val ps by ProviderMonitor.state.collectAsStateWithLifecycle()
     val health by ProviderHealth.state.collectAsStateWithLifecycle()
 
@@ -57,14 +60,14 @@ fun ProvidersScreen(onBack: () -> Unit) {
     LaunchedEffect(Unit) {
         while (true) {
             val s = store.state.value
-            val toProbe = ProviderRouting.all(ProviderMonitor.state.value.manifests, s)
+            val toProbe = ProviderRouting.all(ProviderMonitor.state.value.manifests, s, registry = loaded.registry.devices, suffix = suffix)
                 .filter { ProviderAvailability.settingsSwitch(s).availability(it) == null }
             ProviderProbe.probe(graph.nitro, toProbe)
             delay(ProviderProbe.INTERVAL_MS)
         }
     }
 
-    val all = ProviderRouting.all(ps.manifests, ask)
+    val all = ProviderRouting.all(ps.manifests, ask, registry = loaded.registry.devices, suffix = suffix)
     val sources = ProviderAvailability.chain(ask, { ps.alive[it] }, { health[it] })
     val state = all.associate { it.id to ProviderAvailability.of(it, ask.skills, sources) }
     val chat = all.filter { it.isChat }
@@ -142,7 +145,7 @@ fun ProvidersScreen(onBack: () -> Unit) {
             OutlinedButton(onClick = { store.update { it.copy(skills = setOf(Skills.VAULT)) } }) { Text("Use Vault only") }
         }
         ps.errors.forEach { (d, e) -> Text("$d caps: $e", color = Muted, style = MaterialTheme.typography.bodySmall) }
-        Text("Chat proxy URLs stay in Settings.", color = Muted, style = MaterialTheme.typography.bodySmall)
+        Text("Chat proxy URLs are derived from the tailnet (https://<device>.$suffix) or devices.json; caps manifests override both.", color = Muted, style = MaterialTheme.typography.bodySmall)
         OutlinedButton(onClick = { com.vaulthome.app.devices.DevicesNav.show() }) { Text("Devices: status and power") }
     }
 }

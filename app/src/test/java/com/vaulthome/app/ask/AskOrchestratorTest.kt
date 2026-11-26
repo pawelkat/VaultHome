@@ -7,6 +7,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.net.ServerSocket
 
+private val NITRO_URL = TailnetUrls.derived("nitro5", TailnetUrls.FALLBACK_SUFFIX)
+private val TOWERX_URL = TailnetUrls.derived("towerx", TailnetUrls.FALLBACK_SUFFIX)
+
 class AskOrchestratorTest {
     private val hits = listOf(
         SearchHit("Notes/VaultHome Watch.md", "Open loops", "install watch APK", 0.9f),
@@ -45,11 +48,11 @@ class AskOrchestratorTest {
     private class TwoHosts(val towerx: Health, val nitro: Health = Health.Ok) : NitroGateway {
         val asked = mutableListOf<String>()
         val options = mutableListOf<ChatOptions>()
-        override suspend fun health(baseUrl: String) = if (baseUrl == AskSettings.DEFAULT_TOWERX_URL) towerx else nitro
+        override suspend fun health(baseUrl: String) = if (baseUrl == TOWERX_URL) towerx else nitro
         override suspend fun chat(baseUrl: String, messages: List<ChatMessage>, options: ChatOptions): ChatReply {
             asked += baseUrl
             this.options += options
-            return ChatReply(if (baseUrl == AskSettings.DEFAULT_TOWERX_URL) "from towerx" else "from nitro", "qwen")
+            return ChatReply(if (baseUrl == TOWERX_URL) "from towerx" else "from nitro", "qwen")
         }
     }
 
@@ -70,7 +73,7 @@ class AskOrchestratorTest {
         val o = AskOrchestrator(gw, { AskSettings() }, { hits }, healthSample = { if (it == "nitro5") fresh else null }, now = { 2_000 })
         val out = o.ask("q") as AskOutcome.Nitro
         assertEquals("TowerX", out.host)
-        assertEquals(listOf(AskSettings.DEFAULT_TOWERX_URL), gw.asked)
+        assertEquals(listOf(TOWERX_URL), gw.asked)
         // An old offline sample says nothing any more: Nitro is tried again.
         val gw2 = TwoHosts(Health.Ok)
         val later = AskOrchestrator(gw2, { AskSettings() }, { hits }, healthSample = { fresh }, now = { 1_000 + ProviderAvailability.HEALTH_TTL_MS + 1 })
@@ -97,21 +100,21 @@ class AskOrchestratorTest {
         val gw = TwoHosts(Health.Ok)
         val out = withTowerX(gw, agent = true).ask("q") as AskOutcome.Nitro
         assertEquals("Nitro", out.host)
-        assertEquals(listOf(AskSettings.DEFAULT_NITRO_URL), gw.asked)
+        assertEquals(listOf(NITRO_URL), gw.asked)
     }
 
     @Test fun pinnedProviderOverridesAutoPick() = runBlocking {
         val gw = TwoHosts(Health.Ok)
         val out = withTowerX(gw, agent = true, settings = AskSettings(pinnedProviderId = "towerx-qwen")).ask("q") as AskOutcome.Nitro
         assertEquals("TowerX", out.host)
-        assertEquals(listOf(AskSettings.DEFAULT_TOWERX_URL), gw.asked)
+        assertEquals(listOf(TOWERX_URL), gw.asked)
     }
 
     @Test fun pinnedProviderFallsThroughWhenItFails() = runBlocking {
         val gw = TwoHosts(Health.Down("Nitro refused the connection"))
         val out = withTowerX(gw, agent = true, settings = AskSettings(pinnedProviderId = "towerx-qwen")).ask("q") as AskOutcome.Nitro
         assertEquals("Nitro", out.host)
-        assertEquals(listOf(AskSettings.DEFAULT_NITRO_URL), gw.asked)
+        assertEquals(listOf(NITRO_URL), gw.asked)
     }
 
     @Test fun towerxUnhealthyAfterNitroDownGivesCombinedDetail() = runBlocking {
@@ -138,7 +141,7 @@ class AskOrchestratorTest {
         val m = mapOf("nitro5" to listOf(chatProvider("nitro5", "nitro5-qwen", ready = false)))
         val out = withTowerX(gw, agent = true, manifests = m).ask("q") as AskOutcome.Nitro
         assertEquals("TowerX", out.host)
-        assertEquals(listOf(AskSettings.DEFAULT_TOWERX_URL), gw.asked)
+        assertEquals(listOf(TOWERX_URL), gw.asked)
     }
 
     @Test fun requestIsSizedFromTheManifest() = runBlocking {
@@ -253,13 +256,36 @@ class AskOrchestratorTest {
         assertEquals("Notes/n20.md", c.first().path)
     }
 
+    @Test fun lanIsTriedAfterTailnetFailsWhenListed() = runBlocking {
+        val lan = "http://192.168.1.18:8082"
+        val asked = mutableListOf<String>()
+        val gw = object : NitroGateway {
+            override suspend fun health(baseUrl: String): Health {
+                asked += "h:$baseUrl"
+                return if (baseUrl == lan) Health.Ok else Health.Down("nope")
+            }
+            override suspend fun chat(baseUrl: String, messages: List<ChatMessage>, options: ChatOptions): ChatReply {
+                asked += "c:$baseUrl"
+                return ChatReply("from lan", "qwen")
+            }
+        }
+        val reg = listOf(com.vaulthome.app.devices.RegDevice("nitro5", "Nitro 5", "pc", endpoints = mapOf("lan" to lan)))
+        val out = AskOrchestrator(
+            gw, { AskSettings(excludedProviderIds = setOf(ProviderRouting.TOWERX_PROVIDER_ID)) }, { hits },
+            registry = { reg },
+        ).ask("q") as AskOutcome.Nitro
+        assertEquals("from lan", out.answer)
+        assertEquals(listOf("h:$NITRO_URL", "h:$lan", "c:$lan"), asked)
+    }
+
     /** Real client, nothing listening: falls through without throwing. */
     @Test fun realClientWithNitroKilledFallsThrough() = runBlocking {
         val port = ServerSocket(0).use { it.localPort }
         val out = AskOrchestrator(
             NitroClient(healthTimeoutMs = 300),
-            { AskSettings(nitroBaseUrl = "http://127.0.0.1:$port", excludedProviderIds = setOf(ProviderRouting.TOWERX_PROVIDER_ID)) },
+            { AskSettings(excludedProviderIds = setOf(ProviderRouting.TOWERX_PROVIDER_ID)) },
             { hits },
+            registry = { listOf(com.vaulthome.app.devices.RegDevice("nitro5", "Nitro 5", "pc", chatProxy = "http://127.0.0.1:$port")) },
         ).ask("watch?")
         out as AskOutcome.SearchOnly
         assertEquals(NitroSkip.Down, out.nitro)

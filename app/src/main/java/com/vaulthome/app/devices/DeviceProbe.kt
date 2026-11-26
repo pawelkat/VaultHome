@@ -9,17 +9,26 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 
-/** `/health` of every registry device that has a chat proxy, in parallel (the existing probe, driven by the registry). */
+/** `/health` of every registry chat host, in parallel. URLs come from [com.vaulthome.app.ask.DeviceUrls]. */
 object DeviceProbe {
     const val INTERVAL_MS = 15_000L
 
-    suspend fun probe(gateway: NitroGateway, devices: List<RegDevice>, report: (String, Boolean, String) -> Unit) = coroutineScope {
-        devices.filter { it.chatProxy != null }.map { d ->
+    suspend fun probe(
+        gateway: NitroGateway,
+        devices: List<RegDevice>,
+        suffix: String,
+        report: (String, Boolean, String) -> Unit,
+    ) = coroutineScope {
+        devices.filter(com.vaulthome.app.ask.DeviceUrls::isChatHost).map { d ->
             async {
-                val (ok, detail) = when (val h = gateway.health(d.chatProxy!!)) {
-                    Health.Ok -> true to "up"
-                    is Health.Loading -> false to "not ready (${h.detail.take(160)})"
-                    is Health.Down -> false to h.reason
+                var ok = false
+                var detail = "no URL"
+                for (url in com.vaulthome.app.ask.DeviceUrls.resolve(d.id, suffix, d).urls()) {
+                    when (val h = gateway.health(url)) {
+                        Health.Ok -> { ok = true; detail = "up"; break }
+                        is Health.Loading -> { ok = false; detail = "not ready (${h.detail.take(160)})" }
+                        is Health.Down -> { ok = false; detail = h.reason }
+                    }
                 }
                 report(d.id, ok, detail)
             }

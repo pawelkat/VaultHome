@@ -86,5 +86,7 @@ class AppGraph(app: Application) {
             com.vaulthome.app.ask.ProviderHealth.report(device, ok, detail)
             if (device == com.vaulthome.app.ask.ProviderRouting.TOWERX_DEVICE) com.vaulthome.app.towerx.TowerXMonitor.onHealth(ok, detail)
         },
+        registry = { deviceRegistry.state.value.registry.devices },
+        routerEndpoints = { eventSync.state.value.connect },
     )
 }

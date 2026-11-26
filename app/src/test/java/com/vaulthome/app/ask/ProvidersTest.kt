@@ -89,7 +89,7 @@ class ProvidersTest {
 
     // --- availability mapping -------------------------------------------------------------------------------------
 
-    private fun legacy(device: String) = ProviderRouting.fromSettings(AskSettings()).first { it.device == device }
+    private fun legacy(device: String) = ProviderRouting.fromRegistry(com.vaulthome.app.devices.DeviceRegistryJson.bundled().devices).first { it.device == device }
 
     @Test fun noSignalMeansUnknownAndStillRoutable() {
         val a = avail()(legacy("towerx"))
@@ -250,7 +250,7 @@ class ProviderProbeTest {
             override suspend fun chat(baseUrl: String, messages: List<ChatMessage>, options: ChatOptions) = error("not used")
         }
         val seen = mutableMapOf<String, Pair<Boolean, String>>()
-        val providers = ProviderRouting.all(emptyMap(), AskSettings(towerxBaseUrl = "https://towerx.example"))
+        val providers = ProviderRouting.all(emptyMap(), AskSettings())
         ProviderProbe.probe(gw, providers) { d, ok, detail -> seen[d] = ok to detail }
         assertEquals(mapOf("nitro5" to (true to "up"), "towerx" to (false to "Nitro refused the connection")), seen)
     }
