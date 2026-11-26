@@ -51,6 +51,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalDensity
@@ -60,6 +63,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vaulthome.app.search.HistoryEntry
+import com.vaulthome.app.search.QueryMode
 import com.vaulthome.app.search.SearchFilter
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
@@ -114,11 +119,33 @@ fun SearchScaffold(
     val focusManager = LocalFocusManager.current
     var open by remember { mutableStateOf(false) }
     var picker by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
     var barBottom by remember { mutableIntStateOf(0) }
-    val close = { open = false; picker = false; focusManager.clearFocus(force = true) }
+    val historyStore = remember { (ctx.applicationContext as VaultHomeApp).graph.queryHistory }
+    val history by historyStore.state.collectAsStateWithLifecycle()
+    val close = { open = false; picker = false; showHistory = false; focusManager.clearFocus(force = true) }
+    val recordSearch = { q: String ->
+        if (SearchFilter.shouldSearch(q)) historyStore.record(q, QueryMode.Search)
+    }
+    val replay = { entry: HistoryEntry ->
+        showHistory = false
+        if (entry.mode == QueryMode.Ask) {
+            if (!askMode) askVm.modeChanged()
+            askStore.update { it.copy(askMode = true) }
+            askVm.replay(entry.text)
+            focusManager.clearFocus(force = true)
+        } else {
+            if (askMode) askVm.modeChanged()
+            askStore.update { it.copy(askMode = false) }
+            viewModel.onQueryChange(entry.text)
+            recordSearch(entry.text)
+            open = true
+        }
+    }
     BackHandler(enabled = open) { if (picker) picker = false else close() }
+    BackHandler(enabled = showHistory && !open) { showHistory = false }
     // Back over an Ask answer (or a running ask) returns to the note underneath.
-    BackHandler(enabled = !open && askMode && (showAnswer || askBusy)) { askVm.dismissAnswer() }
+    BackHandler(enabled = !open && !showHistory && askMode && (showAnswer || askBusy)) { askVm.dismissAnswer() }
     val ime = WindowInsets.isImeVisible
     var imeSeen by remember { mutableStateOf(false) }
     LaunchedEffect(ime, open) {
@@ -128,6 +155,7 @@ fun SearchScaffold(
     }
     LaunchedEffect(askMode) { if (askMode) { open = false; picker = false } }
     val submitAsk = { if (!askBusy && ask.question.isNotBlank()) { askVm.ask(); focusManager.clearFocus(force = true) } }
+    val submitSearch = { recordSearch(home.query); close() }
     Box(Modifier.fillMaxSize().systemBarsPadding()) {
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             // Top bar: [remote/local] [Search ◯ Ask] [Settings] — the compact switch sits left of Settings so the
@@ -145,6 +173,12 @@ fun SearchScaffold(
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.onGloballyPositioned { barBottom = (it.positionInParent().y + it.size.height).toInt() }) {
+            IconButton(
+                onClick = { showHistory = !showHistory; if (showHistory) { open = false; picker = false; focusManager.clearFocus(force = true) } },
+                modifier = Modifier.size(36.dp),
+            ) {
+                Icon(HistoryIcon, contentDescription = "Search and Ask history", tint = Color(0xFFB0B0B0), modifier = Modifier.size(22.dp))
+            }
             OutlinedTextField(
                 value = if (askMode) ask.question else home.query,
                 onValueChange = if (askMode) askVm::onQuestionChange else viewModel::onQueryChange,
@@ -154,7 +188,7 @@ fun SearchScaffold(
                 shape = RoundedCornerShape(28.dp),
                 placeholder = { Text(if (askMode) "Ask a question…" else "Search the vault") },
                 keyboardOptions = KeyboardOptions(imeAction = if (askMode) ImeAction.Send else ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { close() }, onSend = { submitAsk() }),
+                keyboardActions = KeyboardActions(onSearch = { submitSearch() }, onSend = { submitAsk() }),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = Color(0xFFB0B0B0), unfocusedBorderColor = Color(0xFF8A8A8A),
                     focusedTextColor = Color(0xFFE6E6E6), unfocusedTextColor = Color(0xFFE6E6E6),
@@ -249,7 +283,7 @@ fun SearchScaffold(
                         items(home.hits) { hit ->
                             Column(
                                 Modifier.fillMaxWidth().background(Color(0xFF242424), RoundedCornerShape(8.dp))
-                                    .clickable { close(); onOpen(hit.path) }.padding(10.dp),
+                                    .clickable { recordSearch(home.query); close(); onOpen(hit.path) }.padding(10.dp),
                             ) {
                                 Text(hit.path, color = Color(0xFFE6E6E6), style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 if (hit.heading.isNotEmpty()) Text(hit.heading, color = Color(0xFF8A8A8A), style = MaterialTheme.typography.labelSmall, maxLines = 1)
@@ -260,8 +294,77 @@ fun SearchScaffold(
                 }
             }
         }
+        if (showHistory && !open) {
+            val top = with(LocalDensity.current) { barBottom + 16.dp.roundToPx() + 4.dp.roundToPx() }
+            Box(
+                Modifier.fillMaxSize().offset { IntOffset(0, top) }.background(Color(0x99000000))
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { showHistory = false },
+            )
+            Column(
+                Modifier.offset { IntOffset(0, top) }.padding(horizontal = 16.dp).fillMaxWidth()
+                    .heightIn(max = 480.dp)
+                    .background(Color(0xFF1A1A1A), RoundedCornerShape(12.dp)).padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("History", color = Color(0xFFE6E6E6), style = MaterialTheme.typography.titleSmall, modifier = Modifier.weight(1f))
+                    if (history.isNotEmpty()) {
+                        androidx.compose.material3.TextButton(onClick = { historyStore.clear() }) {
+                            Text("Clear", color = Color(0xFF8A8A8A))
+                        }
+                    }
+                }
+                if (history.isEmpty()) {
+                    Text("No search or Ask history yet.", color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall)
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        items(history, key = { "${it.mode}:${it.atMs}:${it.text}" }) { entry ->
+                            Column(
+                                Modifier.fillMaxWidth().background(Color(0xFF242424), RoundedCornerShape(8.dp))
+                                    .clickable { replay(entry) }.padding(10.dp),
+                            ) {
+                                Text(if (entry.mode == QueryMode.Ask) "Ask" else "Search", color = Color(0xFF9BC4F0), style = MaterialTheme.typography.labelSmall)
+                                Text(entry.text, color = Color(0xFFE6E6E6), style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
+
+/** Material History icon, inlined so we don't pull in material-icons-extended. */
+private val HistoryIcon: ImageVector = ImageVector.Builder(
+    name = "History", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f,
+).apply {
+    path(fill = SolidColor(Color.Black)) {
+        moveTo(13f, 3f)
+        curveToRelative(-4.97f, 0f, -9f, 4.03f, -9f, 9f)
+        horizontalLineTo(1f)
+        lineToRelative(3.89f, 3.89f)
+        lineToRelative(0.07f, 0.14f)
+        lineTo(9f, 12f)
+        horizontalLineTo(6f)
+        curveToRelative(0f, -3.87f, 3.13f, -7f, 7f, -7f)
+        reflectiveCurveToRelative(7f, 3.13f, 7f, 7f)
+        reflectiveCurveToRelative(-3.13f, 7f, -7f, 7f)
+        curveToRelative(-1.93f, 0f, -3.68f, -0.79f, -4.94f, -2.06f)
+        lineToRelative(-1.42f, 1.42f)
+        curveTo(8.27f, 19.99f, 10.51f, 21f, 13f, 21f)
+        curveToRelative(4.97f, 0f, 9f, -4.03f, 9f, -9f)
+        reflectiveCurveToRelative(-4.03f, -9f, -9f, -9f)
+        close()
+        moveTo(12f, 8f)
+        verticalLineToRelative(5f)
+        lineToRelative(4.28f, 2.54f)
+        lineToRelative(0.72f, -1.21f)
+        lineToRelative(-3.5f, -2.08f)
+        verticalLineTo(8f)
+        horizontalLineTo(12f)
+        close()
+    }
+}.build()
 
 @Composable
 private fun TagPicker(viewModel: VaultHomeViewModel, query: String, hits: Any, chipCount: Int, onPick: (String) -> Unit) {

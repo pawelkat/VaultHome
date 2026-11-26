@@ -70,6 +70,8 @@ fun NoteScreen(
     onBack: () -> Unit,
     /** True when [onBack] leads to another page (search / the notification's origin); false for the landing note, where back exits. */
     canLeave: Boolean = false,
+    /** Shown under the path, e.g. when the landing page is a past daily note because today's is missing. */
+    notice: String? = null,
     actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
     topBar: (@Composable androidx.compose.foundation.layout.RowScope.() -> Unit)? = null,
 ) {
@@ -93,6 +95,7 @@ fun NoteScreen(
         onOpenNote = { stack = NoteStack.push(stack, it) },
         viewModel = viewModel,
         canGoBack = NoteBack.showArrow(stack.size, canLeave, com.vaulthome.app.ask.AskCache.canReturnFrom(ask, stack.last())),
+        notice = if (stack.size == 1) notice else null,
         actions = actions,
         topBar = topBar,
     ) }
@@ -111,7 +114,7 @@ object NoteStack {
 
 @Composable
 private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -> Unit, viewModel: VaultHomeViewModel,
-    canGoBack: Boolean, actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
+    canGoBack: Boolean, notice: String?, actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit,
     topBar: (@Composable androidx.compose.foundation.layout.RowScope.() -> Unit)?) {
     BackHandler(onBack = onBack)
     val context = LocalContext.current
@@ -164,6 +167,9 @@ private fun NoteContent(path: String, onBack: () -> Unit, onOpenNote: (String) -
     SearchScaffold(viewModel = viewModel, onOpen = { if (it != path) onOpenNote(it) }, actions = actions, topBar = topBar) {
         IndexStatusLine(viewModel)
         Text(path, color = PageInk, style = MaterialTheme.typography.titleMedium)
+        if (notice != null) {
+            Text(notice, color = PageMuted, style = MaterialTheme.typography.bodySmall)
+        }
         if (error != null) {
             Text(error!!, color = MaterialTheme.colorScheme.error)
         }
