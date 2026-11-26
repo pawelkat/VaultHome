@@ -68,6 +68,8 @@ fun NoteScreen(
     path: String,
     viewModel: VaultHomeViewModel,
     onBack: () -> Unit,
+    /** True when [onBack] leads to another page (search / the notification's origin); false for the landing note, where back exits. */
+    canLeave: Boolean = false,
     actions: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit = {},
     topBar: (@Composable androidx.compose.foundation.layout.RowScope.() -> Unit)? = null,
 ) {
@@ -90,10 +92,15 @@ fun NoteScreen(
         },
         onOpenNote = { stack = NoteStack.push(stack, it) },
         viewModel = viewModel,
-        canGoBack = stack.size > 1 || com.vaulthome.app.ask.AskCache.canReturnFrom(ask, stack.last()),
+        canGoBack = NoteBack.showArrow(stack.size, canLeave, com.vaulthome.app.ask.AskCache.canReturnFrom(ask, stack.last())),
         actions = actions,
         topBar = topBar,
     ) }
+}
+
+/** The arrow does exactly what system back does, so it shows whenever back goes somewhere. */
+object NoteBack {
+    fun showArrow(stackSize: Int, canLeave: Boolean, canReturnToAnswer: Boolean) = stackSize > 1 || canLeave || canReturnToAnswer
 }
 
 /** Pure back-stack rules (unit-tested). */

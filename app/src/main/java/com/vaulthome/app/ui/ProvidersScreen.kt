@@ -74,7 +74,7 @@ fun ProvidersScreen(onBack: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onBack) { Text("Back") }
+            BackArrow(onBack)
             Text("Ask providers", style = MaterialTheme.typography.titleLarge, color = Ink)
         }
         if (!ps.session) Text("Event sync is off: no Zenoh caps. Availability comes from /health probes and the Settings URLs.", color = Muted, style = MaterialTheme.typography.bodySmall)

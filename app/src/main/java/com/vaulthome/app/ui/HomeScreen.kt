@@ -67,9 +67,9 @@ fun HomeScreen(
     var opened by rememberSaveable { mutableStateOf<String?>(null) }
     val path = daily ?: opened
     if (requestedNote != null) {
-        NoteScreen(path = requestedNote, viewModel = viewModel, onBack = onRequestedNoteClosed, actions = actions, topBar = topBar)
+        NoteScreen(path = requestedNote, viewModel = viewModel, onBack = onRequestedNoteClosed, canLeave = true, actions = actions, topBar = topBar)
     } else if (path != null) {
-        NoteScreen(path = path, viewModel = viewModel, onBack = { if (daily == null) opened = null else onExit() }, actions = actions, topBar = topBar)
+        NoteScreen(path = path, viewModel = viewModel, onBack = { if (daily == null) opened = null else onExit() }, canLeave = daily == null, actions = actions, topBar = topBar)
     } else {
         BackHandler(onBack = onExit)
         SearchScaffold(viewModel = viewModel, onOpen = { opened = it }, actions = actions, topBar = topBar) {

@@ -12,4 +12,11 @@ class NoteStackTest {
         assertEquals(listOf("2026-10-12.md"), s)
         assertEquals(s, NoteStack.pop(s))
     }
+
+    @Test fun arrowShowsWheneverBackGoesSomewhere() {
+        assertEquals(false, NoteBack.showArrow(1, canLeave = false, canReturnToAnswer = false))
+        assertEquals(true, NoteBack.showArrow(2, canLeave = false, canReturnToAnswer = false))
+        assertEquals(true, NoteBack.showArrow(1, canLeave = true, canReturnToAnswer = false))
+        assertEquals(true, NoteBack.showArrow(1, canLeave = false, canReturnToAnswer = true))
+    }
 }
