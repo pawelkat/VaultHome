@@ -89,4 +89,16 @@ class AppGraph(app: Application) {
         registry = { deviceRegistry.state.value.registry.devices },
         routerEndpoints = { eventSync.state.value.connect },
     )
+
+    init {
+        com.vaulthome.app.ask.ProviderMonitor.bind(
+            store = com.vaulthome.app.ask.PrefsCapsStore(app),
+            http = com.vaulthome.app.ask.UrlCapsHttp,
+            bases = { device ->
+                val suffix = com.vaulthome.app.ask.TailnetUrls.suffix(eventSync.state.value.connect)
+                val reg = deviceRegistry.state.value.registry.devices.find { it.id == device }
+                com.vaulthome.app.ask.DeviceUrls.resolve(device, suffix, reg).urls()
+            },
+        )
+    }
 }

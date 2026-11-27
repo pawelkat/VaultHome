@@ -28,13 +28,17 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vaulthome.app.VaultHomeApp
 import com.vaulthome.app.ask.Availability
+import com.vaulthome.app.ask.CapsAge
+import com.vaulthome.app.ask.DeviceUrls
 import com.vaulthome.app.ask.ProviderAvailability
 import com.vaulthome.app.ask.ProviderHealth
 import com.vaulthome.app.ask.ProviderMonitor
 import com.vaulthome.app.ask.ProviderProbe
 import com.vaulthome.app.ask.ProviderRouting
 import com.vaulthome.app.ask.Skills
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 private val Green = Color(0xFF5CC489)
 
@@ -56,7 +60,12 @@ fun ProvidersScreen(onBack: () -> Unit) {
     val ps by ProviderMonitor.state.collectAsStateWithLifecycle()
     val health by ProviderHealth.state.collectAsStateWithLifecycle()
 
-    // Probe on open and every few seconds while the page is shown (TowerX off → greyed; Nitro5 down → greyed).
+    // Refresh caps (Zenoh / cache / HTTP) once on open, then probe /health while the page is shown.
+    LaunchedEffect(loaded.registry, suffix) {
+        val hosts = loaded.registry.devices.filter(DeviceUrls::isChatHost).map { it.id }
+            .filter { it != ProviderMonitor.selfDevice }
+        withContext(Dispatchers.IO) { hosts.forEach { ProviderMonitor.refresh(it) } }
+    }
     LaunchedEffect(Unit) {
         while (true) {
             val s = store.state.value
@@ -81,7 +90,7 @@ fun ProvidersScreen(onBack: () -> Unit) {
             BackArrow(onBack)
             Text("Ask providers", style = MaterialTheme.typography.titleLarge, color = Ink)
         }
-        if (!ps.session) Text("Event sync is off: no Zenoh caps. Availability comes from /health probes and the Settings URLs.", color = Muted, style = MaterialTheme.typography.bodySmall)
+        if (!ps.session) Text("Event sync is off: no live Zenoh caps. Fallback is last-known cache, then HTTP /caps or /health+/props, then devices.json.", color = Muted, style = MaterialTheme.typography.bodySmall)
 
         val autoNow = routing.order.firstOrNull()
         Row(
@@ -110,6 +119,7 @@ fun ProvidersScreen(onBack: () -> Unit) {
                             if (pinned && !usable) add("pinned, skipped while ${a.label}")
                             add("skills ${p.skills.joinToString("/")}")
                             p.nCtx?.let { add("nCtx $it") }
+                            add(CapsAge.line(p.capsSource, p.capsAtMs, p.capsStale, System.currentTimeMillis()))
                             health[p.device]?.takeIf { !it.ok }?.let { add(it.detail.take(80)) }
                         }.joinToString(" · ")
                         Text(detail, color = if (a == Availability.Available) Green else Muted.copy(alpha = if (usable) 1f else 0.55f), style = MaterialTheme.typography.bodySmall)
@@ -145,7 +155,7 @@ fun ProvidersScreen(onBack: () -> Unit) {
             OutlinedButton(onClick = { store.update { it.copy(skills = setOf(Skills.VAULT)) } }) { Text("Use Vault only") }
         }
         ps.errors.forEach { (d, e) -> Text("$d caps: $e", color = Muted, style = MaterialTheme.typography.bodySmall) }
-        Text("Chat proxy URLs are derived from the tailnet (https://<device>.$suffix) or devices.json; caps manifests override both.", color = Muted, style = MaterialTheme.typography.bodySmall)
+        Text("Caps, in order: live Zenoh vault/caps/<device>, last-known cache (stale), HTTP /caps or /health+/props, then devices.json or the derived https://<device>.$suffix URL.", color = Muted, style = MaterialTheme.typography.bodySmall)
         OutlinedButton(onClick = { com.vaulthome.app.devices.DevicesNav.show() }) { Text("Devices: status and power") }
     }
 }

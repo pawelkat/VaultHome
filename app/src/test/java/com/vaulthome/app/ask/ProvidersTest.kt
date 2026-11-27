@@ -237,37 +237,119 @@ class ProvidersTest {
         assertEquals(ChatOptions(null, null) to null, ProviderRouting.options(known, setOf(Skills.VAULT)))
     }
 
-    @Test fun monitorTracksPresenceFetchesCapsAndDropsOnLeave() {
+    @Test fun monitorTracksPresenceFetchesCapsAndKeepsStaleOnLeave() {
         val asked = mutableListOf<String>()
-        ProviderMonitor.onSessionClosed()
+        ProviderMonitor.resetForTests()
         ProviderMonitor.selfDevice = "s24"
         ProviderMonitor.caller = { sel, _, _ -> asked += sel; caps }
         ProviderMonitor.onToken("vault/presence/towerx", true)
         assertEquals(true, ProviderMonitor.alive("towerx"))
         // The query runs on a worker thread: refresh directly for a deterministic check.
         ProviderMonitor.refresh("towerx")
-        assertEquals(listOf("towerx-qwen", "towerx-gemma"), ProviderMonitor.state.value.manifests["towerx"]?.map { it.id })
+        val live = ProviderMonitor.state.value.manifests["towerx"]!!
+        assertEquals(listOf("towerx-qwen", "towerx-gemma"), live.map { it.id })
+        assertEquals(CapsSource.Zenoh, live[0].capsSource)
+        assertFalse(live[0].capsStale)
         assertTrue(asked.all { it == "vault/caps/towerx" })
         ProviderMonitor.onToken("vault/presence/towerx", false)
         assertEquals(false, ProviderMonitor.alive("towerx"))
-        assertNull(ProviderMonitor.state.value.manifests["towerx"])
+        val stale = ProviderMonitor.state.value.manifests["towerx"]!!
+        assertEquals(listOf("towerx-qwen", "towerx-gemma"), stale.map { it.id })
+        assertTrue(stale.all { it.capsStale })
         ProviderMonitor.onToken("vault/presence/s24", true)
         ProviderMonitor.onSessionClosed()
         assertNull(ProviderMonitor.alive("s24"))
-        ProviderMonitor.caller = null
+        assertTrue(ProviderMonitor.state.value.manifests["towerx"]!!.all { it.capsStale })
+        ProviderMonitor.resetForTests()
     }
 
     @Test fun monitorKeepsErrorForBadCapsAndIgnoresForeignKeys() {
-        ProviderMonitor.onSessionClosed()
+        ProviderMonitor.resetForTests()
         ProviderMonitor.caller = { _, _, _ -> "nope" }
         ProviderMonitor.onToken("devices/towerx-power", true)
         assertTrue(ProviderMonitor.state.value.alive.isEmpty())
         ProviderMonitor.onToken("vault/presence/nitro5", true)
         ProviderMonitor.refresh("nitro5")
         assertTrue(ProviderMonitor.state.value.errors.containsKey("nitro5"))
+        assertNull(ProviderMonitor.state.value.manifests["nitro5"])
         ProviderMonitor.onToken("vault/presence/*", false)
         assertTrue(ProviderMonitor.state.value.alive.isEmpty())
-        ProviderMonitor.caller = null
+        ProviderMonitor.resetForTests()
+    }
+
+    @Test fun monitorFallsBackToCachedCapsWhenZenohMisses() {
+        ProviderMonitor.resetForTests()
+        ProviderMonitor.caller = { _, _, _ -> caps }
+        ProviderMonitor.onToken("vault/presence/towerx", true)
+        ProviderMonitor.refresh("towerx", now = 1_000)
+        assertFalse(ProviderMonitor.state.value.manifests["towerx"]!!.first().capsStale)
+        ProviderMonitor.caller = { _, _, _ -> null }
+        ProviderMonitor.refresh("towerx", now = 2_000)
+        val list = ProviderMonitor.state.value.manifests["towerx"]!!
+        assertEquals(listOf("towerx-qwen", "towerx-gemma"), list.map { it.id })
+        assertEquals(CapsSource.Zenoh, list[0].capsSource)
+        assertTrue(list[0].capsStale)
+        assertEquals(1_000L, list[0].capsAtMs)
+        assertTrue(ProviderMonitor.state.value.errors["towerx"]!!.contains("last-known"))
+        ProviderMonitor.resetForTests()
+    }
+
+    @Test fun monitorSynthesizesCapsFromHealthAndPropsWhenNoAdvertisedDocument() {
+        ProviderMonitor.resetForTests()
+        ProviderMonitor.caller = { _, _, _ -> null }
+        ProviderMonitor.bases = { listOf("https://towerx.tailf52603.ts.net") }
+        ProviderMonitor.http = CapsHttp { url, _ ->
+            when {
+                url.endsWith("/caps") || url.endsWith("/caps.json") -> 404 to "File Not Found"
+                url.endsWith("/health") -> 200 to """{"status":"ok","llama":"ok","vault_searchd":"ok"}"""
+                url.endsWith("/props") -> 200 to """{"default_generation_settings":{"n_ctx":16384,"params":{}}}"""
+                else -> null
+            }
+        }
+        ProviderMonitor.onToken("vault/presence/towerx", true)
+        ProviderMonitor.refresh("towerx", now = 5_000)
+        val p = ProviderMonitor.state.value.manifests["towerx"]!!.single()
+        assertEquals("towerx-qwen", p.id)
+        assertEquals(16384, p.nCtx)
+        assertEquals(listOf(Skills.VAULT), p.skills)
+        assertEquals(CapsSource.HealthProps, p.capsSource)
+        assertFalse(p.capsStale)
+        assertFalse(p.fromSettings)
+        assertEquals("https://towerx.tailf52603.ts.net", p.baseUrl)
+        ProviderMonitor.resetForTests()
+    }
+
+    @Test fun monitorPrefersHttpCapsOverHealthProps() {
+        ProviderMonitor.resetForTests()
+        ProviderMonitor.caller = { _, _, _ -> null }
+        ProviderMonitor.bases = { listOf("https://towerx.tailf52603.ts.net") }
+        ProviderMonitor.http = CapsHttp { url, _ ->
+            when {
+                url.endsWith("/caps") -> 200 to caps
+                url.endsWith("/health") -> 200 to """{"status":"ok"}"""
+                else -> null
+            }
+        }
+        ProviderMonitor.onToken("vault/presence/towerx", true)
+        ProviderMonitor.refresh("towerx", now = 9_000)
+        val list = ProviderMonitor.state.value.manifests["towerx"]!!
+        assertEquals(listOf("towerx-qwen", "towerx-gemma"), list.map { it.id })
+        assertEquals(CapsSource.HttpCaps, list[0].capsSource)
+        assertEquals(16384, list[0].nCtx)
+        ProviderMonitor.resetForTests()
+    }
+
+    @Test fun capsAgeLineAndPropsNctx() {
+        assertEquals("just now", CapsAge.label(1_000, 3_000))
+        assertEquals("12s ago", CapsAge.label(0, 12_000))
+        assertEquals("2h ago", CapsAge.label(0, 2 * 3_600_000L))
+        assertEquals("caps Zenoh · 12s ago", CapsAge.line(CapsSource.Zenoh, 0, false, 12_000))
+        assertEquals("caps Zenoh (stale, 2h ago)", CapsAge.line(CapsSource.Zenoh, 0, true, 2 * 3_600_000L))
+        assertEquals("caps devices.json", CapsAge.line(CapsSource.Registry, null, false, 0))
+        assertEquals(16384, CapsFromProbe.nCtxFromProps("""{"default_generation_settings":{"n_ctx":16384}}"""))
+        assertNull(CapsFromProbe.nCtxFromProps("""{"default_generation_settings":{}}"""))
+        assertTrue(CapsFromProbe.healthOk(200, """{"status":"ok","llama":"ok"}"""))
+        assertFalse(CapsFromProbe.healthOk(404, "File Not Found"))
     }
 
     @Test fun chatJsonCarriesMaxTokensAndOptionalSkills() {
