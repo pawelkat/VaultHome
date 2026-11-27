@@ -109,7 +109,7 @@ fun ProvidersScreen(onBack: () -> Unit) {
                             add(a.label)
                             if (pinned && !usable) add("pinned, skipped while ${a.label}")
                             add("skills ${p.skills.joinToString("/")}")
-                            p.nCtx?.let { add("n_ctx $it") }
+                            p.nCtx?.let { add("nCtx $it") }
                             health[p.device]?.takeIf { !it.ok }?.let { add(it.detail.take(80)) }
                         }.joinToString(" · ")
                         Text(detail, color = if (a == Availability.Available) Green else Muted.copy(alpha = if (usable) 1f else 0.55f), style = MaterialTheme.typography.bodySmall)

@@ -8,25 +8,37 @@ import org.junit.Test
 
 class ProvidersTest {
     private val caps = """
-        {"schemaVersion":1,"device":"towerx","providers":[
-          {"id":"towerx-qwen","kind":"llm-chat","title":"Qwen on TowerX","description":"d","skills":["vault","code"],
-           "tools":{"vault":["vault_search"]},"endpoint":"https://towerx.tailf52603.ts.net/v1/chat/completions",
-           "transport":"chat-proxy","scope":"tailnet","access":"read-only","ready":true,"n_ctx":16384,"max_tokens_suggest":2048,"root":null},
-          {"id":"towerx-gemma","kind":"embedding-index","title":"Gemma","skills":["search"],"endpoint":"local",
-           "transport":"local-index","scope":"local","access":"read-only","ready":true,"n_ctx":null,"max_tokens_suggest":null}
+        {"@context":"https://pawelkat.github.io/vault-ontology/context/caps-v2.jsonld","schemaVersion":2,"@graph":[
+          {"@id":"https://pawelkat.github.io/vault-ontology/id/towerx-qwen","@type":"LlmChatProvider",
+           "label":"Qwen on TowerX","comment":"d","providesSkill":["VaultSkill","CodeSkill"],
+           "hostedOn":{"@id":"https://pawelkat.github.io/vault-ontology/id/towerx","@type":"Device","deviceId":"towerx"},
+           "endpointUrl":"https://towerx.tailf52603.ts.net/v1/chat/completions",
+           "transport":"ChatProxy","scope":"Tailnet","accessMode":"ReadOnly","ready":true,"nCtx":16384,"maxTokensSuggest":2048,
+           "codeRoot":"/home/pawel/projects"},
+          {"@id":"https://pawelkat.github.io/vault-ontology/id/towerx-gemma","@type":"EmbeddingIndexProvider",
+           "label":"Gemma","comment":"","providesSkill":["SearchSkill"],
+           "hostedOn":{"@id":"https://pawelkat.github.io/vault-ontology/id/towerx","@type":"Device","deviceId":"towerx"},
+           "transport":"LocalIndex","scope":"Local","accessMode":"ReadOnly","ready":true}
         ]}
     """.trimIndent()
 
-    private fun chat(device: String, id: String, skills: List<String> = listOf("vault"), ready: Boolean = true) = Provider(
-        id, device, "llm-chat", id, "", skills, "https://$device/v1/chat/completions", "chat-proxy", "tailnet", "read-only", ready, null, null,
+    private val v1Caps = """
+        {"schemaVersion":1,"device":"towerx","providers":[
+          {"id":"towerx-qwen","kind":"llm-chat","title":"Qwen on TowerX","skills":["vault"],
+           "endpoint":"https://towerx.tailf52603.ts.net/v1/chat/completions","transport":"chat-proxy"}
+        ]}
+    """.trimIndent()
+
+    private fun chat(device: String, id: String, skills: List<String> = listOf(Skills.VAULT), ready: Boolean = true) = Provider(
+        id, device, Provider.KIND_CHAT, id, "", skills, "https://$device/v1/chat/completions", Provider.TRANSPORT_PROXY, Provider.SCOPE_TAILNET, Provider.ACCESS_READ_ONLY, ready, null, null,
     )
 
-    @Test fun parsesSchemaV1() {
+    @Test fun parsesSchemaV2() {
         val list = ProviderManifest.parse(caps).getOrThrow()
         assertEquals(listOf("towerx-qwen", "towerx-gemma"), list.map { it.id })
         val q = list[0]
         assertTrue(q.isChat)
-        assertEquals(listOf("vault", "code"), q.skills)
+        assertEquals(listOf("VaultSkill", "CodeSkill"), q.skills)
         assertEquals(16384, q.nCtx)
         assertEquals(2048, q.maxTokensSuggest)
         assertEquals("https://towerx.tailf52603.ts.net", q.baseUrl)
@@ -36,14 +48,15 @@ class ProvidersTest {
     }
 
     @Test fun unsupportedOrBrokenManifestIsAnError() {
-        assertTrue(ProviderManifest.parse("""{"schemaVersion":2,"device":"x","providers":[]}""").isFailure)
+        assertTrue(ProviderManifest.parse(v1Caps).isFailure)
         assertTrue(ProviderManifest.parse("not json").isFailure)
         assertTrue(ProviderManifest.parse("""{"schemaVersion":1,"providers":[]}""").isFailure)
+        assertTrue(ProviderManifest.parse("""{"schemaVersion":3,"@graph":[]}""").isFailure)
     }
 
     @Test fun readyDefaultsToFalseAndBadEntriesAreDropped() {
         val list = ProviderManifest.parse(
-            """{"schemaVersion":1,"device":"d","providers":[{"id":"a","kind":"llm-chat"},{"kind":"llm-chat"},{"id":"b"}]}""",
+            """{"schemaVersion":2,"@graph":[{"@id":"a","@type":"LlmChatProvider","hostedOn":{"deviceId":"d"}},{"@type":"LlmChatProvider","hostedOn":{"deviceId":"d"}},{"@id":"b"}]}""",
         ).getOrThrow()
         assertEquals(listOf("a"), list.map { it.id })
         assertFalse(list[0].ready)
@@ -51,21 +64,22 @@ class ProvidersTest {
 
     @Test fun optionalLinkBaseIsReadAndUnknownKeysAreIgnored() {
         val list = ProviderManifest.parse(
-            """{"schemaVersion":1,"device":"towerx","providers":[
-                {"id":"t","kind":"llm-chat","endpoint":"https://towerx.tailf52603.ts.net/v1/chat/completions",
-                 "transport":"chat-proxy","linkBase":"https://towerx.tailf52603.ts.net/vault/","extra":1}
+            """{"schemaVersion":2,"@graph":[
+                {"@id":"t","@type":"LlmChatProvider","hostedOn":{"deviceId":"towerx"},
+                 "endpointUrl":"https://towerx.tailf52603.ts.net/v1/chat/completions",
+                 "transport":"ChatProxy","linkBase":"https://towerx.tailf52603.ts.net/vault/","extra":1}
             ]}"""
         ).getOrThrow()
         assertEquals("https://towerx.tailf52603.ts.net/vault/", list.single().linkBase)
         assertNull(ProviderManifest.parse(
-            """{"schemaVersion":1,"device":"d","providers":[{"id":"a","kind":"llm-chat"}]}"""
+            """{"schemaVersion":2,"@graph":[{"@id":"a","@type":"LlmChatProvider","hostedOn":{"deviceId":"d"}}]}"""
         ).getOrThrow().single().linkBase)
     }
 
     @Test fun capsKey() = assertEquals("vault/caps/nitro5", ProviderManifest.key("nitro5"))
 
     private fun avail(
-        wanted: Set<String> = setOf("vault"),
+        wanted: Set<String> = setOf(Skills.VAULT),
         settings: AskSettings = AskSettings(),
         alive: (String) -> Boolean? = { null },
         sample: (String) -> HealthSample? = { null },
@@ -135,7 +149,7 @@ class ProvidersTest {
     }
 
     @Test fun exclusionIsKeyedByProviderIdNotDevice() {
-        val other = chat("nitro5", "nitro5-code", skills = listOf("vault", "code"))
+        val other = chat("nitro5", "nitro5-code", skills = listOf(Skills.VAULT, Skills.CODE))
         val a = avail(settings = AskSettings(excludedProviderIds = setOf("nitro5-qwen")), sample = { HealthSample(true, "up", 0) })
         assertEquals(Availability.Disabled, a(legacy("nitro5")))
         assertEquals(Availability.Available, a(other))
@@ -160,9 +174,9 @@ class ProvidersTest {
     }
 
     @Test fun missingSkillMeansNoSkillOnlyForOtherwiseAvailableChatProviders() {
-        val both = setOf("vault", "code")
+        val both = setOf(Skills.VAULT, Skills.CODE)
         assertEquals(Availability.NoSkill, avail(wanted = both)(chat("nitro5", "n")))
-        assertEquals(Availability.Available, avail(wanted = both)(chat("towerx", "t", skills = listOf("vault", "code"))))
+        assertEquals(Availability.Available, avail(wanted = both)(chat("towerx", "t", skills = listOf(Skills.VAULT, Skills.CODE))))
         assertEquals(Availability.Offline, avail(wanted = both, alive = { false })(chat("nitro5", "n")))
     }
 
@@ -172,13 +186,13 @@ class ProvidersTest {
     }
 
     @Test fun unavailableProvidersAreSkippedWithAReason() {
-        val all = listOf(chat("nitro5", "n"), chat("towerx", "t"), chat("lap", "l", skills = listOf("code")))
+        val all = listOf(chat("nitro5", "n"), chat("towerx", "t"), chat("lap", "l", skills = listOf(Skills.CODE)))
         val r = ProviderRouting.route(
             all, "t",
             availability = avail(settings = AskSettings(excludedProviderIds = setOf("n")), alive = { if (it == "towerx") false else null }),
         )
         assertEquals(emptyList<String>(), r.order.filter { it.id != "l" }.map { it.id })
-        assertEquals(mapOf("n" to "disabled", "t" to "offline", "l" to "no vault skill"), r.skipped.associate { it.provider.id to it.reason })
+        assertEquals(mapOf("n" to "disabled", "t" to "offline", "l" to "no VaultSkill skill"), r.skipped.associate { it.provider.id to it.reason })
     }
 
     @Test fun embeddingIndexIsNeverAChatProvider() {
@@ -196,31 +210,31 @@ class ProvidersTest {
     }
 
     @Test fun skillFilterAndRequestOptions() {
-        val both = setOf("vault", "code")
-        val r = ProviderRouting.route(listOf(chat("nitro5", "n"), chat("towerx", "t", skills = listOf("vault", "code"))), null, both, avail(wanted = both))
+        val both = setOf(Skills.VAULT, Skills.CODE)
+        val r = ProviderRouting.route(listOf(chat("nitro5", "n"), chat("towerx", "t", skills = listOf(Skills.VAULT, Skills.CODE))), null, both, avail(wanted = both))
         assertEquals(listOf("t"), r.order.map { it.id })
-        assertEquals("no code skill", r.skipped.single().reason)
+        assertEquals("no CodeSkill skill", r.skipped.single().reason)
         val p = ProviderManifest.parse(caps).getOrThrow()[0]
-        assertEquals(ChatOptions(2048, null) to null, ProviderRouting.options(p, setOf("vault")))
-        assertEquals(ChatOptions(2048, listOf("code", "vault")), ProviderRouting.options(p, both).first)
-        assertEquals(ChatOptions(2048, listOf("code")), ProviderRouting.options(p, setOf("code")).first)
+        assertEquals(ChatOptions(2048, null) to null, ProviderRouting.options(p, setOf(Skills.VAULT)))
+        assertEquals(ChatOptions(2048, listOf(Skills.CODE, Skills.VAULT)), ProviderRouting.options(p, both).first)
+        assertEquals(ChatOptions(2048, listOf(Skills.CODE)), ProviderRouting.options(p, setOf(Skills.CODE)).first)
     }
 
     @Test fun tokenCapFallsBackTo1024OnlyForNitroWhenNCtxIsUnknown() {
-        val nitro = chat("nitro5", "nitro5-qwen") // fromSettings-like: n_ctx and suggest both missing
+        val nitro = chat("nitro5", "nitro5-qwen") // fromSettings-like: nCtx and suggest both missing
         val tower = chat("towerx", "towerx-qwen")
         val other = chat("box", "box-qwen")
-        assertEquals(ChatOptions(1024, null) to "n_ctx unknown: using 1024 tokens", ProviderRouting.options(nitro, setOf("vault")))
-        assertEquals(ChatOptions(null, null) to null, ProviderRouting.options(tower, setOf("vault")))
-        assertEquals(ChatOptions(null, null) to null, ProviderRouting.options(other, setOf("vault")))
-        // maxTokensSuggest still wins when present, even if n_ctx is missing; no fallback note.
+        assertEquals(ChatOptions(1024, null) to "nCtx unknown: using 1024 tokens", ProviderRouting.options(nitro, setOf(Skills.VAULT)))
+        assertEquals(ChatOptions(null, null) to null, ProviderRouting.options(tower, setOf(Skills.VAULT)))
+        assertEquals(ChatOptions(null, null) to null, ProviderRouting.options(other, setOf(Skills.VAULT)))
+        // maxTokensSuggest still wins when present, even if nCtx is missing; no fallback note.
         val suggested = chat("towerx", "t").copy(maxTokensSuggest = 2048)
-        assertEquals(ChatOptions(2048, null) to null, ProviderRouting.options(suggested, setOf("vault")))
+        assertEquals(ChatOptions(2048, null) to null, ProviderRouting.options(suggested, setOf(Skills.VAULT)))
         val nitroSuggested = chat("nitro5", "n").copy(maxTokensSuggest = 1536)
-        assertEquals(ChatOptions(1536, null) to null, ProviderRouting.options(nitroSuggested, setOf("vault")))
-        // n_ctx known, no suggest: omit max_tokens (server decides); no note.
+        assertEquals(ChatOptions(1536, null) to null, ProviderRouting.options(nitroSuggested, setOf(Skills.VAULT)))
+        // nCtx known, no suggest: omit max_tokens (server decides); no note.
         val known = chat("nitro5", "n").copy(nCtx = 16384)
-        assertEquals(ChatOptions(null, null) to null, ProviderRouting.options(known, setOf("vault")))
+        assertEquals(ChatOptions(null, null) to null, ProviderRouting.options(known, setOf(Skills.VAULT)))
     }
 
     @Test fun monitorTracksPresenceFetchesCapsAndDropsOnLeave() {
@@ -262,16 +276,18 @@ class ProvidersTest {
         assertFalse(plain.has("skills"))
         val capped = org.json.JSONObject(ChatJson.request(listOf(ChatMessage("user", "q")), ChatOptions(1024)))
         assertEquals(1024, capped.getInt("max_tokens"))
-        val sized = org.json.JSONObject(ChatJson.request(listOf(ChatMessage("user", "q")), ChatOptions(2048, listOf("code", "vault"))))
+        val sized = org.json.JSONObject(ChatJson.request(listOf(ChatMessage("user", "q")), ChatOptions(2048, listOf(Skills.CODE, Skills.VAULT))))
         assertEquals(2048, sized.getInt("max_tokens"))
-        assertEquals("code", sized.getJSONArray("skills").getString(0))
-        assertEquals("vault", sized.getJSONArray("skills").getString(1))
+        assertEquals(Skills.CODE, sized.getJSONArray("skills").getString(0))
+        assertEquals(Skills.VAULT, sized.getJSONArray("skills").getString(1))
     }
 
     @Test fun skillsSettingParsing() {
-        assertEquals(setOf("vault"), AskSettings.parseSkills(null))
-        assertEquals(setOf("vault"), AskSettings.parseSkills("search,bogus"))
-        assertEquals(setOf("code", "vault"), AskSettings.parseSkills("code,vault"))
+        assertEquals(setOf(Skills.VAULT), AskSettings.parseSkills(null))
+        assertEquals(setOf(Skills.VAULT), AskSettings.parseSkills("search,bogus"))
+        assertEquals(setOf(Skills.CODE, Skills.VAULT), AskSettings.parseSkills("code,vault"))
+        assertEquals(setOf(Skills.CODE, Skills.VAULT), AskSettings.parseSkills("CodeSkill,VaultSkill"))
+        assertEquals(setOf(Skills.CODE, Skills.VAULT), AskSettings.parseSkills("code,VaultSkill"))
     }
 }
 

@@ -44,9 +44,9 @@ data class AskSettings(
     }
 
     companion object {
-        /** Stored `code,vault` → set; blank or unknown values fall back to vault only. */
+        /** Stored `code,vault` or caps v2 `CodeSkill,VaultSkill` → set; blank or unknown values fall back to VaultSkill only. */
         fun parseSkills(raw: String?): Set<String> =
-            raw.orEmpty().split(',').map { it.trim() }.filter { it == Skills.VAULT || it == Skills.CODE }.toSet().ifEmpty { setOf(Skills.VAULT) }
+            raw.orEmpty().split(',').mapNotNull { Skills.normalizeAsk(it) }.toSet().ifEmpty { setOf(Skills.VAULT) }
 
         fun parseIds(raw: String?): Set<String> =
             raw.orEmpty().split(',').map { it.trim() }.filter { it.isNotBlank() }.toSet()
