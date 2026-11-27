@@ -424,13 +424,8 @@ private fun CompactAskSwitch(askMode: Boolean, target: AskTarget, onMode: (Boole
             val (label, ink) = AskBadge.label(target, host) to if (target == AskTarget.Remote) RemoteInk else LocalInk
             Text(
                 label, color = ink, style = MaterialTheme.typography.labelSmall, maxLines = 1,
-                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable {
-                    if (target == com.vaulthome.app.ask.AskTarget.Remote && current != null) {
-                        com.vaulthome.app.ask.CapsViewer.show(current.device)
-                    } else {
-                        com.vaulthome.app.ask.ProvidersNav.show()
-                    }
-                }.background(Color(0xFF1A1A1A)).padding(horizontal = 6.dp, vertical = 2.dp),
+                modifier = Modifier.clip(RoundedCornerShape(8.dp)).clickable { com.vaulthome.app.ask.ProvidersNav.show() }
+                    .background(Color(0xFF1A1A1A)).padding(horizontal = 6.dp, vertical = 2.dp),
             )
             Spacer(Modifier.width(6.dp))
         }

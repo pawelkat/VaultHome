@@ -136,9 +136,9 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
-                val capsDevice by com.vaulthome.app.ask.CapsViewer.open.collectAsStateWithLifecycle()
-                capsDevice?.let { device ->
-                    com.vaulthome.app.ui.CapsJsonSheet(device, onDismiss = { com.vaulthome.app.ask.CapsViewer.hide() })
+                val capsView by com.vaulthome.app.ask.CapsViewer.open.collectAsStateWithLifecycle()
+                capsView?.let { req ->
+                    com.vaulthome.app.ui.CapsJsonSheet(req.device, onDismiss = { com.vaulthome.app.ask.CapsViewer.hide() })
                 }
                 }
             }

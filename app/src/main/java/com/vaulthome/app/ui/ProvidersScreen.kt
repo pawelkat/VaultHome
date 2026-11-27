@@ -1,13 +1,15 @@
 package com.vaulthome.app.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -24,6 +26,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -126,13 +131,11 @@ fun ProvidersScreen(onBack: () -> Unit) {
                     add(CapsAge.line(p.capsSource, p.capsAtMs, p.capsStale, System.currentTimeMillis()))
                     health[p.device]?.takeIf { !it.ok }?.let { add(it.detail.take(80)) }
                 }.joinToString(" · ")
-                Text(
-                    detail,
-                    color = if (a == Availability.Available) Green else Muted.copy(alpha = if (usable) 1f else 0.55f),
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier
-                        .padding(start = 40.dp)
-                        .clickable { CapsViewer.show(p.device) },
+                ProviderCapsStatusRow(
+                    detail = detail,
+                    advertised = p.capsSource.isAdvertised,
+                    statusColor = if (a == Availability.Available) Green else Muted.copy(alpha = if (usable) 1f else 0.55f),
+                    onShowCaps = { CapsViewer.show(p.device) },
                 )
                 // Outside the selectable row so toggling it does not also pin the provider.
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 40.dp)) {
@@ -168,3 +171,91 @@ fun ProvidersScreen(onBack: () -> Unit) {
         OutlinedButton(onClick = { com.vaulthome.app.devices.DevicesNav.show() }) { Text("Devices: status and power") }
     }
 }
+
+/**
+ * Status line on an Ask providers row. A "Show caps JSON" icon appears only when this provider's
+ * caps came from a live advertisement (Zenoh or HTTP /caps).
+ */
+@Composable
+internal fun ProviderCapsStatusRow(
+    detail: String,
+    advertised: Boolean,
+    statusColor: Color,
+    onShowCaps: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier.fillMaxWidth().padding(start = 40.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            detail,
+            color = statusColor,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+        )
+        if (advertised) {
+            IconButton(onClick = onShowCaps, modifier = Modifier.size(40.dp)) {
+                Icon(
+                    CapsDataObjectIcon,
+                    contentDescription = "Show caps JSON",
+                    tint = Ink,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
+    }
+}
+
+/** Material Data Object icon, inlined so we don't pull in material-icons-extended. */
+private val CapsDataObjectIcon: ImageVector = ImageVector.Builder(
+    name = "DataObject", defaultWidth = 24.dp, defaultHeight = 24.dp, viewportWidth = 24f, viewportHeight = 24f,
+).apply {
+    path(fill = SolidColor(Color.Black)) {
+        moveTo(4f, 7f)
+        verticalLineToRelative(2f)
+        curveToRelative(0f, 0.55f, 0.45f, 1f, 1f, 1f)
+        horizontalLineToRelative(2f)
+        verticalLineToRelative(1f)
+        horizontalLineTo(5f)
+        curveToRelative(-0.55f, 0f, -1f, 0.45f, -1f, 1f)
+        verticalLineToRelative(3f)
+        horizontalLineToRelative(2f)
+        verticalLineToRelative(-2f)
+        horizontalLineToRelative(2f)
+        verticalLineToRelative(2f)
+        horizontalLineToRelative(2f)
+        verticalLineToRelative(-3f)
+        curveToRelative(0f, -0.55f, -0.45f, -1f, -1f, -1f)
+        horizontalLineTo(8f)
+        verticalLineToRelative(-1f)
+        horizontalLineToRelative(2f)
+        curveToRelative(0.55f, 0f, 1f, -0.45f, 1f, -1f)
+        verticalLineTo(7f)
+        horizontalLineTo(4f)
+        close()
+        moveTo(20f, 7f)
+        horizontalLineToRelative(-6f)
+        verticalLineToRelative(2f)
+        curveToRelative(0f, 0.55f, 0.45f, 1f, 1f, 1f)
+        horizontalLineToRelative(2f)
+        verticalLineToRelative(1f)
+        horizontalLineToRelative(-2f)
+        curveToRelative(-0.55f, 0f, -1f, 0.45f, -1f, 1f)
+        verticalLineToRelative(3f)
+        horizontalLineToRelative(2f)
+        verticalLineToRelative(-2f)
+        horizontalLineToRelative(2f)
+        verticalLineToRelative(2f)
+        horizontalLineToRelative(2f)
+        verticalLineToRelative(-3f)
+        curveToRelative(0f, -0.55f, -0.45f, -1f, -1f, -1f)
+        horizontalLineToRelative(-2f)
+        verticalLineToRelative(-1f)
+        horizontalLineToRelative(2f)
+        curveToRelative(0.55f, 0f, 1f, -0.45f, 1f, -1f)
+        verticalLineTo(7f)
+        close()
+    }
+}.build()
+

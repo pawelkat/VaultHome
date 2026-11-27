@@ -50,11 +50,18 @@ object ProvidersNav {
     fun hide() { mutable.value = false }
 }
 
-/** Opens the caps JSON sheet from a status chip (Providers, Ask header, Devices). */
+/** One request to open the caps JSON sheet. [id] changes on every [CapsViewer.show] so a repeat tap still recomposes. */
+data class CapsViewRequest(val device: String, val id: Long)
+
+/** Opens the caps JSON sheet from the advertised-caps icon on the Ask providers page. */
 object CapsViewer {
-    private val mutable = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
-    val open: kotlinx.coroutines.flow.StateFlow<String?> = mutable
-    fun show(device: String) { if (device.isNotBlank()) mutable.value = device }
+    private val seq = java.util.concurrent.atomic.AtomicLong(0)
+    private val mutable = kotlinx.coroutines.flow.MutableStateFlow<CapsViewRequest?>(null)
+    val open: kotlinx.coroutines.flow.StateFlow<CapsViewRequest?> = mutable
+    fun show(device: String) {
+        if (device.isBlank()) return
+        mutable.value = CapsViewRequest(device, seq.incrementAndGet())
+    }
     fun hide() { mutable.value = null }
 }
 

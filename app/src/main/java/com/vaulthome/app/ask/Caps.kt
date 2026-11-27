@@ -15,6 +15,10 @@ enum class CapsSource(val label: String) {
     HttpCaps("HTTP /caps"),
     HealthProps("HTTP /health+/props"),
     Registry("devices.json"),
+    ;
+
+    /** True when this came from a live advertisement (Zenoh `vault/caps` or HTTP /caps), including a cached copy. */
+    val isAdvertised: Boolean get() = this == Zenoh || this == HttpCaps
 }
 
 /** Persisted last-known caps document for one device, including the exact raw payload as received. */
