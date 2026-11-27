@@ -80,10 +80,10 @@ class AskOrchestratorTest {
         assertEquals("Nitro", (later.ask("q") as AskOutcome.Nitro).host)
     }
 
-    private fun chatProvider(device: String, id: String, skills: List<String> = listOf("vault"), ready: Boolean = true, nCtx: Int? = 16384, max: Int? = 2048) = Provider(
-        id = id, device = device, kind = "llm-chat", title = id, description = "", skills = skills,
-        endpoint = "https://$device.example.ts.net/v1/chat/completions", transport = "chat-proxy", scope = "tailnet",
-        access = "read-only", ready = ready, nCtx = nCtx, maxTokensSuggest = max,
+    private fun chatProvider(device: String, id: String, skills: List<String> = listOf(Skills.VAULT), ready: Boolean = true, nCtx: Int? = 16384, max: Int? = 2048) = Provider(
+        id = id, device = device, kind = Provider.KIND_CHAT, title = id, description = "", skills = skills,
+        endpoint = "https://$device.example.ts.net/v1/chat/completions", transport = Provider.TRANSPORT_PROXY, scope = Provider.SCOPE_TAILNET,
+        access = Provider.ACCESS_READ_ONLY, ready = ready, nCtx = nCtx, maxTokensSuggest = max,
     )
 
     /** No host is baked in first: with Nitro down, TowerX answers; with both up the auto-pick rule (Nitro) answers. */
@@ -156,12 +156,12 @@ class AskOrchestratorTest {
         val gw = FakeNitro()
         val out = orchestrator(gw).ask("q") as AskOutcome.Nitro
         assertEquals(ChatOptions(1024, null), gw.options.single())
-        assertEquals("n_ctx unknown: using 1024 tokens", out.sizingNote)
+        assertEquals("nCtx unknown: using 1024 tokens", out.sizingNote)
     }
 
     @Test fun missingNCtxOmitsMaxTokensForTowerXAndHasNoSizingNote() = runBlocking {
         val gw = TwoHosts(Health.Ok, nitro = Health.Down("x"))
-        // Settings-synthesised TowerX provider has no n_ctx / maxTokensSuggest.
+        // Settings-synthesised TowerX provider has no nCtx / maxTokensSuggest.
         val out = withTowerX(gw, agent = true, settings = AskSettings(excludedProviderIds = setOf(ProviderRouting.NITRO_PROVIDER_ID))).ask("q") as AskOutcome.Nitro
         assertEquals("TowerX", out.host)
         assertEquals(ChatOptions(null, null), gw.options.single())
@@ -170,11 +170,11 @@ class AskOrchestratorTest {
 
     @Test fun codeSkillOnlyGoesToProvidersThatAdvertiseIt() = runBlocking {
         val gw = TwoHosts(Health.Ok)
-        val m = mapOf("towerx" to listOf(chatProvider("towerx", "towerx-qwen", skills = listOf("vault", "code"))))
-        val settings = AskSettings(skills = setOf("vault", "code"))
+        val m = mapOf("towerx" to listOf(chatProvider("towerx", "towerx-qwen", skills = listOf(Skills.VAULT, Skills.CODE))))
+        val settings = AskSettings(skills = setOf(Skills.VAULT, Skills.CODE))
         val out = withTowerX(gw, agent = true, settings = settings, manifests = m).ask("q") as AskOutcome.Nitro
         assertEquals("TowerX", out.host)
-        assertEquals(listOf(listOf("code", "vault")), gw.options.map { it.skills })
+        assertEquals(listOf(listOf(Skills.CODE, Skills.VAULT)), gw.options.map { it.skills })
     }
 
     @Test fun nitroUpAnswersWithoutLocalCitations() = runBlocking {

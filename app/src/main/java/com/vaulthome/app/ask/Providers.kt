@@ -3,15 +3,26 @@ package com.vaulthome.app.ask
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Skill names in the proposed caps schema v1 (vault note `Koder - VaultHome providers panel`). */
+/** Skill names in caps v2 (ontology local names). Settings still accept the old `vault`/`code` aliases. */
 object Skills {
-    const val VAULT = "vault"
-    const val CODE = "code"
-    const val SEARCH = "search"
+    const val VAULT = "VaultSkill"
+    const val CODE = "CodeSkill"
+    const val SEARCH = "SearchSkill"
+
+    /** Maps a caps or settings token to a v2 skill name; unknown tokens are dropped. */
+    fun normalize(raw: String): String? = when (raw.trim()) {
+        VAULT, "vault" -> VAULT
+        CODE, "code" -> CODE
+        SEARCH, "search" -> SEARCH
+        else -> null
+    }
+
+    /** Ask settings only store vault and code; search is an index skill, not a chat request skill. */
+    fun normalizeAsk(raw: String): String? = normalize(raw)?.takeIf { it == VAULT || it == CODE }
 }
 
 /**
- * One entry of a device's `vault/caps/<device>` manifest (proposed schema v1). Nothing here names a preferred
+ * One entry of a device's `vault/caps/<device>` manifest (caps v2 JSON-LD). Nothing here names a preferred
  * host: ordering lives in [ProviderRouting].
  */
 data class Provider(
@@ -33,8 +44,8 @@ data class Provider(
     /** LAN chat-proxy URL from devices.json `endpoints.lan`, if any; never a hardcoded address. Tried after [baseUrl]. */
     val lanUrl: String? = null,
     /**
-     * Optional caps v1 field: URL prefix of vault file links this provider emits
-     * (e.g. `https://towerx.tailf52603.ts.net/vault/`). Absent or unknown keys are ignored.
+     * Optional helper-only field: URL prefix of vault file links this provider emits
+     * (e.g. `https://towerx.tailf52603.ts.net/vault/`). Not in the ontology; ignored if absent.
      */
     val linkBase: String? = null,
 ) {
@@ -56,51 +67,72 @@ data class Provider(
     fun hasSkills(wanted: Set<String>): Boolean = skills.containsAll(wanted)
 
     companion object {
-        const val KIND_CHAT = "llm-chat"
-        const val KIND_EMBEDDING = "embedding-index"
-        const val TRANSPORT_PROXY = "chat-proxy"
+        const val KIND_CHAT = "LlmChatProvider"
+        const val KIND_EMBEDDING = "EmbeddingIndexProvider"
+        const val TRANSPORT_PROXY = "ChatProxy"
+        const val TRANSPORT_INDEX = "LocalIndex"
+        const val SCOPE_TAILNET = "Tailnet"
+        const val SCOPE_LOCAL = "Local"
+        const val ACCESS_READ_ONLY = "ReadOnly"
         const val DEFAULT_MAX_TOKENS = 1024
     }
 }
 
-/** Parses `vault/caps/<device>` JSON. Unknown fields are ignored; a bad or newer schema is an error, not a guess. */
+/** Parses caps v2 JSON-LD on `vault/caps/<device>`. The `@context` URL is ignored (bundle a local copy; it does not resolve). Unknown fields are ignored; a bad or v1 schema is an error, not a guess. */
 object ProviderManifest {
-    const val SCHEMA = 1
+    const val SCHEMA = 2
 
     fun key(device: String) = "vault/caps/$device"
 
     fun parse(json: String): Result<List<Provider>> = runCatching {
         val root = JSONObject(json)
         require(root.optInt("schemaVersion", -1) == SCHEMA) { "unsupported caps schemaVersion ${root.opt("schemaVersion")}" }
-        val device = root.optString("device").also { require(it.isNotBlank()) { "caps without device" } }
-        val arr = root.optJSONArray("providers") ?: JSONArray()
-        (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let { provider(device, it) } }
+        val arr = root.optJSONArray("@graph") ?: JSONArray()
+        (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let { provider(it) } }
     }
 
-    private fun provider(device: String, o: JSONObject): Provider? {
-        val id = o.optString("id").takeIf { it.isNotBlank() } ?: return null
-        val kind = o.optString("kind").takeIf { it.isNotBlank() } ?: return null
+    private fun provider(o: JSONObject): Provider? {
+        val id = localName(stringOrFirst(o, "@id")).takeIf { it.isNotBlank() } ?: return null
+        val kind = localName(stringOrFirst(o, "@type")).takeIf { it.isNotBlank() } ?: return null
+        val hosted = o.optJSONObject("hostedOn")
+        val device = hosted?.optString("deviceId")?.takeIf { it.isNotBlank() } ?: return null
         return Provider(
             id = id,
             device = device,
             kind = kind,
-            title = o.optString("title").ifBlank { id },
-            description = o.optString("description"),
-            skills = strings(o.optJSONArray("skills")),
-            endpoint = o.optString("endpoint"),
-            transport = o.optString("transport"),
-            scope = o.optString("scope"),
-            access = o.optString("access"),
+            title = o.optString("label").ifBlank { id },
+            description = o.optString("comment"),
+            skills = strings(o.optJSONArray("providesSkill")).map(::localName),
+            endpoint = o.optString("endpointUrl"),
+            transport = localName(o.optString("transport")),
+            scope = localName(o.optString("scope")),
+            access = localName(o.optString("accessMode")),
             ready = o.optBoolean("ready", false),
-            nCtx = positive(o, "n_ctx"),
-            maxTokensSuggest = positive(o, "max_tokens_suggest"),
-            linkBase = o.optString("linkBase").ifBlank { o.optString("link_base") }.ifBlank { null },
+            nCtx = positive(o, "nCtx"),
+            maxTokensSuggest = positive(o, "maxTokensSuggest"),
+            linkBase = o.optString("linkBase").ifBlank { null },
         )
     }
 
     private fun strings(a: JSONArray?): List<String> = if (a == null) emptyList() else (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }
 
     private fun positive(o: JSONObject, key: String): Int? = if (o.isNull(key)) null else o.optInt(key, 0).takeIf { it > 0 }
+
+    /** Compact name, or the last path / fragment segment of an IRI. */
+    internal fun localName(raw: String): String {
+        val s = raw.trim()
+        val cut = maxOf(s.lastIndexOf('#'), s.lastIndexOf('/'))
+        return if (cut >= 0 && cut < s.length - 1) s.substring(cut + 1) else s
+    }
+
+    private fun stringOrFirst(o: JSONObject, key: String): String {
+        if (!o.has(key) || o.isNull(key)) return ""
+        val v = o.get(key)
+        return when (v) {
+            is JSONArray -> if (v.length() == 0) "" else v.optString(0)
+            else -> v.toString()
+        }
+    }
 }
 
 /** Availability of one provider right now. [routable] ones are tried by Ask (Unknown still gets a `/health` check). */
@@ -128,7 +160,7 @@ object ProviderAvailability {
     const val HEALTH_TTL_MS = 60_000L
 
     /** On-device providers need nothing from the network. */
-    val local = AvailabilitySource { p -> if (p.scope == "local") Availability.Available else null }
+    val local = AvailabilitySource { p -> if (p.scope == Provider.SCOPE_LOCAL) Availability.Available else null }
 
     /** Providers the user turned off with "Don't use for Ask" (keyed by provider id). */
     fun settingsSwitch(s: AskSettings) = AvailabilitySource { p ->
@@ -169,8 +201,8 @@ data class Routing(val order: List<Provider>, val skipped: List<Skipped>)
 /**
  * Provider choice without a baked-in host order (note: "do not prefer any LLM provider").
  *  1. A provider the user pinned in the panel goes first.
- *  2. Otherwise the auto-pick rule from the brief: the available `nitro5` llm-chat provider with only the `vault` skill.
- *  3. Then every other available llm-chat provider, by id, so the order is stable and not tied to a host.
+ *  2. Otherwise the auto-pick rule from the brief: the available `nitro5` LlmChatProvider with only the `VaultSkill`.
+ *  3. Then every other available LlmChatProvider, by id, so the order is stable and not tied to a host.
  * Providers whose [Availability] is not routable (offline, disabled, no skill) are never tried; a pinned provider that
  * goes offline is simply skipped. Unknown ones are tried, since `/health` still runs before each chat.
  */
@@ -201,7 +233,7 @@ object ProviderRouting {
             id = id, device = d.id, kind = Provider.KIND_CHAT, title = title,
             description = "From ${urls.source.name.lowercase()} URL (no caps manifest yet)",
             skills = listOf(Skills.VAULT), endpoint = "${urls.primary}/v1/chat/completions",
-            transport = Provider.TRANSPORT_PROXY, scope = "tailnet", access = "read-only",
+            transport = Provider.TRANSPORT_PROXY, scope = Provider.SCOPE_TAILNET, access = Provider.ACCESS_READ_ONLY,
             ready = true, nCtx = null, maxTokensSuggest = null, fromSettings = true, lanUrl = urls.lan,
         )
     }
@@ -217,8 +249,8 @@ object ProviderRouting {
         val settings = fromRegistry(registry, suffix).filter { it.device !in manifests }
         val localGemma = Provider(
             id = "$localDevice-gemma", device = localDevice, kind = Provider.KIND_EMBEDDING, title = "Local EmbeddingGemma index",
-            description = "On-device embedding search only", skills = listOf(Skills.SEARCH), endpoint = "local", transport = "local-index",
-            scope = "local", access = "read-only", ready = true, nCtx = null, maxTokensSuggest = null,
+            description = "On-device embedding search only", skills = listOf(Skills.SEARCH), endpoint = "", transport = Provider.TRANSPORT_INDEX,
+            scope = Provider.SCOPE_LOCAL, access = Provider.ACCESS_READ_ONLY, ready = true, nCtx = null, maxTokensSuggest = null,
         )
         return (manifests.values.flatten() + settings).filter { it.device != localDevice || it.kind != Provider.KIND_EMBEDDING } + localGemma
     }
@@ -243,14 +275,14 @@ object ProviderRouting {
 
     /**
      * Request sizing. [Provider.maxTokensSuggest] always wins when present.
-     * If `n_ctx` is unknown and no suggest is given, only the nitro5 provider gets today's 1024 cap (and the UI note);
+     * If `nCtx` is unknown and no suggest is given, only the nitro5 provider gets today's 1024 cap (and the UI note);
      * every other provider omits `max_tokens` so the server decides.
      */
     fun options(p: Provider, wanted: Set<String>): Pair<ChatOptions, String?> {
         val skills = if (wanted == setOf(Skills.VAULT)) null else wanted.sorted()
         val appliedFallback = p.maxTokensSuggest == null && p.nCtx == null && p.device == NITRO_DEVICE
         val max = p.maxTokensSuggest ?: if (appliedFallback) Provider.DEFAULT_MAX_TOKENS else null
-        val note = if (appliedFallback) "n_ctx unknown: using ${Provider.DEFAULT_MAX_TOKENS} tokens" else null
+        val note = if (appliedFallback) "nCtx unknown: using ${Provider.DEFAULT_MAX_TOKENS} tokens" else null
         return ChatOptions(max, skills) to note
     }
 }
