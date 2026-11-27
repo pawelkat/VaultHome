@@ -1,6 +1,7 @@
 package com.vaulthome.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,6 +30,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vaulthome.app.VaultHomeApp
 import com.vaulthome.app.ask.Availability
 import com.vaulthome.app.ask.CapsAge
+import com.vaulthome.app.ask.CapsViewer
 import com.vaulthome.app.ask.DeviceUrls
 import com.vaulthome.app.ask.ProviderAvailability
 import com.vaulthome.app.ask.ProviderHealth
@@ -114,17 +116,24 @@ fun ProvidersScreen(onBack: () -> Unit) {
                     RadioButton(selected = pinned, onClick = null, enabled = usable)
                     Column(Modifier.padding(start = 8.dp)) {
                         Text("${p.title} · ${p.hostLabel}", color = ink)
-                        val detail = buildList {
-                            add(a.label)
-                            if (pinned && !usable) add("pinned, skipped while ${a.label}")
-                            add("skills ${p.skills.joinToString("/")}")
-                            p.nCtx?.let { add("nCtx $it") }
-                            add(CapsAge.line(p.capsSource, p.capsAtMs, p.capsStale, System.currentTimeMillis()))
-                            health[p.device]?.takeIf { !it.ok }?.let { add(it.detail.take(80)) }
-                        }.joinToString(" · ")
-                        Text(detail, color = if (a == Availability.Available) Green else Muted.copy(alpha = if (usable) 1f else 0.55f), style = MaterialTheme.typography.bodySmall)
                     }
                 }
+                val detail = buildList {
+                    add(a.label)
+                    if (pinned && !usable) add("pinned, skipped while ${a.label}")
+                    add("skills ${p.skills.joinToString("/")}")
+                    p.nCtx?.let { add("nCtx $it") }
+                    add(CapsAge.line(p.capsSource, p.capsAtMs, p.capsStale, System.currentTimeMillis()))
+                    health[p.device]?.takeIf { !it.ok }?.let { add(it.detail.take(80)) }
+                }.joinToString(" · ")
+                Text(
+                    detail,
+                    color = if (a == Availability.Available) Green else Muted.copy(alpha = if (usable) 1f else 0.55f),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier
+                        .padding(start = 40.dp)
+                        .clickable { CapsViewer.show(p.device) },
+                )
                 // Outside the selectable row so toggling it does not also pin the provider.
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 40.dp)) {
                     Switch(

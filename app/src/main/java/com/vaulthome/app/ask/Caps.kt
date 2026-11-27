@@ -17,13 +17,77 @@ enum class CapsSource(val label: String) {
     Registry("devices.json"),
 }
 
-/** Persisted last-known caps document for one device. */
+/** Persisted last-known caps document for one device, including the exact raw payload as received. */
 data class CapsRecord(
     val device: String,
     val json: String,
     val source: CapsSource,
     val atMs: Long,
+    /** Zenoh reply keyexpr as received (may be the caps wildcard, not `vault/caps/<device>`). */
+    val zenohKey: String? = null,
+    /** Raw `GET /health` body when [source] is [CapsSource.HealthProps]. */
+    val healthJson: String? = null,
+    /** Raw `GET /props` body when [source] is [CapsSource.HealthProps]. */
+    val propsJson: String? = null,
+    /** The devices.json entry when [source] is [CapsSource.Registry]. */
+    val registryJson: String? = null,
 )
+
+/** In-memory view of one device's caps for the JSON sheet (raw payload plus source metadata). */
+data class CapsEvidence(
+    val device: String,
+    val rawJson: String,
+    val source: CapsSource,
+    val atMs: Long?,
+    val stale: Boolean = false,
+    val zenohKey: String? = null,
+    val healthJson: String? = null,
+    val propsJson: String? = null,
+    val registryJson: String? = null,
+) {
+    fun toRecord(): CapsRecord? {
+        val at = atMs ?: return null
+        return CapsRecord(device, rawJson, source, at, zenohKey, healthJson, propsJson, registryJson)
+    }
+
+    companion object {
+        fun from(record: CapsRecord, stale: Boolean) = CapsEvidence(
+            device = record.device,
+            rawJson = record.json,
+            source = record.source,
+            atMs = record.atMs,
+            stale = stale,
+            zenohKey = record.zenohKey,
+            healthJson = record.healthJson,
+            propsJson = record.propsJson,
+            registryJson = record.registryJson,
+        )
+    }
+}
+
+object CapsJson {
+    fun pretty(raw: String): String {
+        val t = raw.trim()
+        if (t.isEmpty()) return raw
+        return runCatching {
+            if (t.startsWith("[")) JSONArray(t).toString(2) else JSONObject(t).toString(2)
+        }.getOrDefault(raw)
+    }
+
+    /** Source line for the sheet, e.g. live Zenoh plus the reply key, or synthesized from /health+/props. */
+    fun sourceLabel(ev: CapsEvidence): String = when (ev.source) {
+        CapsSource.Zenoh -> "live Zenoh" + (ev.zenohKey?.let { " key $it" } ?: "")
+        CapsSource.HttpCaps -> "HTTP /caps"
+        CapsSource.HealthProps -> "synthesized from /health+/props"
+        CapsSource.Registry -> "devices.json"
+    }
+
+    fun receivedLine(atMs: Long?, nowMs: Long): String? {
+        val at = atMs ?: return null
+        val fmt = java.text.DateFormat.getDateTimeInstance(java.text.DateFormat.MEDIUM, java.text.DateFormat.MEDIUM)
+        return "${fmt.format(java.util.Date(at))} · ${CapsAge.label(at, nowMs)}"
+    }
+}
 
 interface CapsStore {
     fun get(device: String): CapsRecord?
@@ -49,15 +113,29 @@ class PrefsCapsStore(context: Context) : CapsStore {
         val source = runCatching { CapsSource.valueOf(prefs.getString("source.$device", "") ?: "") }.getOrNull()
             ?: return null
         val at = prefs.getLong("at.$device", 0L).takeIf { it > 0 } ?: return null
-        return CapsRecord(device, json, source, at)
+        return CapsRecord(
+            device, json, source, at,
+            zenohKey = prefs.getString("key.$device", null),
+            healthJson = prefs.getString("health.$device", null),
+            propsJson = prefs.getString("props.$device", null),
+            registryJson = prefs.getString("registry.$device", null),
+        )
     }
 
     override fun put(record: CapsRecord) {
-        prefs.edit()
+        val e = prefs.edit()
             .putString("json.${record.device}", record.json)
             .putString("source.${record.device}", record.source.name)
             .putLong("at.${record.device}", record.atMs)
-            .apply()
+        optional(e, "key.${record.device}", record.zenohKey)
+        optional(e, "health.${record.device}", record.healthJson)
+        optional(e, "props.${record.device}", record.propsJson)
+        optional(e, "registry.${record.device}", record.registryJson)
+        e.apply()
+    }
+
+    private fun optional(e: android.content.SharedPreferences.Editor, key: String, value: String?) {
+        if (value.isNullOrBlank()) e.remove(key) else e.putString(key, value)
     }
 
     override fun all(): List<CapsRecord> = prefs.all.keys.mapNotNull { key ->

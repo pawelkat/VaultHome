@@ -49,3 +49,12 @@ object ProvidersNav {
     fun show() { mutable.value = true }
     fun hide() { mutable.value = false }
 }
+
+/** Opens the caps JSON sheet from a status chip (Providers, Ask header, Devices). */
+object CapsViewer {
+    private val mutable = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val open: kotlinx.coroutines.flow.StateFlow<String?> = mutable
+    fun show(device: String) { if (device.isNotBlank()) mutable.value = device }
+    fun hide() { mutable.value = null }
+}
+

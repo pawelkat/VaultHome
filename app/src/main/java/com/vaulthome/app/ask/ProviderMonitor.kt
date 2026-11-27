@@ -1,5 +1,6 @@
 package com.vaulthome.app.ask
 
+import com.vaulthome.events.QueryReply
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -15,25 +16,30 @@ data class ProviderState(
     val manifests: Map<String, List<Provider>> = emptyMap(),
     /** Last caps problem per device (no reply, bad JSON, unsupported schema). */
     val errors: Map<String, String> = emptyMap(),
+    /** Exact raw payload and source metadata per device, for the caps JSON sheet. */
+    val evidence: Map<String, CapsEvidence> = emptyMap(),
 )
 
 /**
  * Follows presence tokens and resolves capabilities in this order:
- *  1. live Zenoh query on `vault/caps/<device>`
+ *  1. live Zenoh query on `vault/caps/<device>`, then the caps wildcard (device from `hostedOn.deviceId`)
  *  2. last-known cached caps (timestamp kept, marked stale) — shown immediately
  *  3. if there is no cache, or the device is still alive, HTTP `GET {base}/caps` then `/health`+`/props`
  *  4. otherwise [ProviderRouting.fromRegistry] fills the gap (devices.json / derived URLs)
  *
  * A leave or a session close no longer drops last-known caps; they stay, marked stale.
- * Presence stays as it is and no other keys are used. The event sync service feeds [onToken]
- * from a wildcard liveliness subscription and sets [caller] while its Zenoh session runs.
+ * The event sync service feeds [onToken] from a wildcard liveliness subscription and sets [querier]
+ * (preferred) or [caller] while its Zenoh session runs.
  */
 object ProviderMonitor {
     private val mutable = MutableStateFlow(ProviderState())
     val state: StateFlow<ProviderState> = mutable
 
-    /** `(selector, payload, timeoutMs) -> reply`, set while a Zenoh session runs. */
+    /** `(selector, payload, timeoutMs) -> reply`, set while a Zenoh session runs. Used when [querier] is unset. */
     @Volatile var caller: ((String, String?, Long) -> String?)? = null
+
+    /** `(selector, payload, timeoutMs) -> replies with keyexpr`. Preferred: the reply key may be the query selector. */
+    @Volatile var querier: ((String, String?, Long) -> List<QueryReply>)? = null
 
     /** This phone's presence id: its own caps are not queried. */
     @Volatile var selfDevice: String = ""
@@ -69,13 +75,18 @@ object ProviderMonitor {
 
     fun restoreCache() {
         val loaded = store.all().mapNotNull { rec ->
-            ProviderManifest.parse(rec.json).getOrNull()?.let { rec.device to it.stamped(rec.source, rec.atMs, stale = true) }
+            ProviderManifest.forDevice(rec.json, rec.device)?.let { list ->
+                Triple(rec.device, list.stamped(rec.source, rec.atMs, stale = true), CapsEvidence.from(rec, stale = true))
+            }
         }
         if (loaded.isEmpty()) return
         mutable.update { s ->
-            // Live (non-stale) entries already in memory win over a stale restore.
             val keep = s.manifests.filterValues { it.any { p -> !p.capsStale } }
-            s.copy(manifests = loaded.toMap() + keep)
+            val keepEv = s.evidence.filterValues { !it.stale }
+            s.copy(
+                manifests = loaded.associate { it.first to it.second } + keep,
+                evidence = loaded.associate { it.first to it.third } + keepEv,
+            )
         }
     }
 
@@ -88,6 +99,7 @@ object ProviderMonitor {
                 session = true,
                 alive = s.alive + (device to alive),
                 manifests = if (alive) s.manifests else markStale(s.manifests, device),
+                evidence = if (alive) s.evidence else markEvidenceStale(s.evidence, device),
             )
         }
         if (autoRefresh && alive && device != selfDevice) io.execute { refresh(device) }
@@ -99,24 +111,51 @@ object ProviderMonitor {
      */
     fun refresh(device: String, now: Long = System.currentTimeMillis()) {
         val live = mutable.value.alive[device] == true
+        // Identity is always hostedOn.deviceId, never the reply keyexpr (which may be the query selector).
+        val specific = zenohReplies(ProviderManifest.key(device))
+        applyAllFrom(specific, now)
+        if (pickForDevice(specific, device) != null) return
+        val wild = zenohReplies(ProviderManifest.WILDCARD)
+        applyAllFrom(wild, now)
+        if (pickForDevice(wild, device) != null) return
+        fallbackAfterZenoh(device, live, now, if (querier == null && caller == null) "no Zenoh session" else "no caps reply")
+    }
 
-        val zenoh = caller?.let { c -> runCatching { c(ProviderManifest.key(device), null, ZENOH_TIMEOUT_MS) }.getOrNull() }
-        if (zenoh != null) {
-            val parsed = ProviderManifest.parse(zenoh)
-            parsed.fold(
-                { apply(device, zenoh, CapsSource.Zenoh, now, stale = !live, error = null) },
-                { e -> fallbackAfterZenoh(device, live, now, "Zenoh caps: ${e.message ?: "bad caps"}") },
-            )
-            return
+    /** GET `vault/caps/<device>`, then the caps wildcard if that missed or the body was not for [device]. */
+    internal fun fetchZenoh(device: String): QueryReply? {
+        pickForDevice(zenohReplies(ProviderManifest.key(device)), device)?.let { return it }
+        return pickForDevice(zenohReplies(ProviderManifest.WILDCARD), device)
+    }
+
+    private fun zenohReplies(selector: String): List<QueryReply> {
+        querier?.let { q -> return runCatching { q(selector, null, ZENOH_TIMEOUT_MS) }.getOrDefault(emptyList()) }
+        val text = caller?.let { c -> runCatching { c(selector, null, ZENOH_TIMEOUT_MS) }.getOrNull() } ?: return emptyList()
+        return listOf(QueryReply(selector, text))
+    }
+
+    internal fun pickForDevice(replies: List<QueryReply>, device: String): QueryReply? =
+        replies.firstOrNull { ProviderManifest.forDevice(it.payload, device) != null }
+
+    private fun applyAllFrom(replies: List<QueryReply>, now: Long) {
+        for (hit in replies) {
+            val ids = ProviderManifest.parse(hit.payload).getOrNull()?.map { it.device }?.toSet() ?: continue
+            for (id in ids) {
+                if (id.isNotBlank() && id != selfDevice) {
+                    apply(id, hit.payload, CapsSource.Zenoh, now, stale = mutable.value.alive[id] == false, error = null, zenohKey = hit.key)
+                }
+            }
         }
-        fallbackAfterZenoh(device, live, now, if (caller == null) "no Zenoh session" else "no caps reply")
     }
 
     private fun fallbackAfterZenoh(device: String, live: Boolean, now: Long, zenohError: String) {
-        val cached = store.get(device)?.takeIf { ProviderManifest.parse(it.json).isSuccess }
+        val cached = store.get(device)?.takeIf { ProviderManifest.forDevice(it.json, it.device) != null }
         if (cached != null) {
-            apply(device, cached.json, cached.source, cached.atMs, stale = true, error = "$zenohError; using last-known caps")
-            // A live device can still upgrade a stale cache via HTTP (new /caps, or /props nCtx).
+            apply(
+                device, cached.json, cached.source, cached.atMs, stale = true,
+                error = "$zenohError; using last-known caps",
+                zenohKey = cached.zenohKey, healthJson = cached.healthJson, propsJson = cached.propsJson,
+                registryJson = cached.registryJson,
+            )
             if (live) tryHttp(device, now, keepOnMiss = true)
             return
         }
@@ -141,13 +180,12 @@ object ProviderMonitor {
                     errors += "$path HTTP $code"
                     continue
                 }
-                val parsed = ProviderManifest.parse(body)
-                if (parsed.isSuccess) {
+                if (ProviderManifest.forDevice(body, device) != null) {
                     val stale = mutable.value.alive[device] == false
                     apply(device, body, CapsSource.HttpCaps, now, stale, error = null)
                     return true
                 }
-                errors += "$path: ${parsed.exceptionOrNull()?.message ?: "bad caps"}"
+                errors += "$path: ${ProviderManifest.parse(body).exceptionOrNull()?.message ?: "not for $device"}"
             }
         }
         for (base in urls) {
@@ -160,7 +198,10 @@ object ProviderMonitor {
                 val json = CapsFromProbe.syntheticV2(device, root, nCtx, ready = healthOk)
                 val stale = mutable.value.alive[device] == false
                 val note = if (!healthOk) " /health not ok, nCtx from /props" else null
-                apply(device, json, CapsSource.HealthProps, now, stale, error = note)
+                apply(
+                    device, json, CapsSource.HealthProps, now, stale, error = note,
+                    healthJson = health?.second, propsJson = props?.takeIf { it.first in 200..299 }?.second,
+                )
                 return true
             }
             if (health == null) errors += "/health unreachable at $root"
@@ -172,12 +213,25 @@ object ProviderMonitor {
         return false
     }
 
-    private fun apply(device: String, json: String, source: CapsSource, atMs: Long, stale: Boolean, error: String?) {
-        val list = ProviderManifest.parse(json).getOrNull()?.stamped(source, atMs, stale) ?: return
-        if (!stale) store.put(CapsRecord(device, json, source, atMs))
+    private fun apply(
+        device: String,
+        json: String,
+        source: CapsSource,
+        atMs: Long,
+        stale: Boolean,
+        error: String?,
+        zenohKey: String? = null,
+        healthJson: String? = null,
+        propsJson: String? = null,
+        registryJson: String? = null,
+    ) {
+        val list = ProviderManifest.forDevice(json, device)?.stamped(source, atMs, stale) ?: return
+        val ev = CapsEvidence(device, json, source, atMs, stale, zenohKey, healthJson, propsJson, registryJson)
+        if (!stale) ev.toRecord()?.let(store::put)
         mutable.update { s ->
             s.copy(
                 manifests = s.manifests + (device to list),
+                evidence = s.evidence + (device to ev),
                 errors = if (error == null) s.errors - device else s.errors + (device to error),
             )
         }
@@ -186,6 +240,11 @@ object ProviderMonitor {
     private fun markStale(manifests: Map<String, List<Provider>>, device: String): Map<String, List<Provider>> {
         val list = manifests[device] ?: return manifests
         return manifests + (device to list.map { it.copy(capsStale = true) })
+    }
+
+    private fun markEvidenceStale(evidence: Map<String, CapsEvidence>, device: String): Map<String, CapsEvidence> {
+        val ev = evidence[device] ?: return evidence
+        return evidence + (device to ev.copy(stale = true))
     }
 
     fun onSessionStarted() = mutable.update { it.copy(session = true) }
@@ -197,13 +256,23 @@ object ProviderMonitor {
                 session = false,
                 alive = emptyMap(),
                 manifests = s.manifests.mapValues { (_, list) -> list.map { it.copy(capsStale = true) } },
+                evidence = s.evidence.mapValues { (_, ev) -> ev.copy(stale = true) },
             )
         }
+    }
+
+    /** Evidence for the JSON sheet: live/cache/HTTP record, or the devices.json entry as a last resort. */
+    fun evidenceFor(device: String, registry: List<com.vaulthome.app.devices.RegDevice> = emptyList()): CapsEvidence? {
+        mutable.value.evidence[device]?.let { return it }
+        val d = registry.firstOrNull { it.id == device } ?: return null
+        val entry = com.vaulthome.app.devices.DeviceRegistryJson.encodeOne(d)
+        return CapsEvidence(device, entry, CapsSource.Registry, atMs = null, registryJson = entry)
     }
 
     /** Tests: drop in-memory state and use a fresh memory store (does not touch app prefs). */
     fun resetForTests() {
         caller = null
+        querier = null
         http = null
         bases = { emptyList() }
         store = MemoryCapsStore()

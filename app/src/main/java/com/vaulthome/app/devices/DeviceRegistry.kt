@@ -118,26 +118,31 @@ object DeviceRegistryJson {
 
     private fun strings(a: JSONArray?): List<String> = if (a == null) emptyList() else (0 until a.length()).map { a.optString(it) }.filter { it.isNotBlank() }
 
+    /** One registry device as a JSON object (the devices.json entry). */
+    fun encodeDevice(d: RegDevice): JSONObject {
+        val o = JSONObject().put("id", d.id).put("name", d.name).put("kind", d.kind)
+        if (d.endpoints.isNotEmpty()) o.put("endpoints", JSONObject(d.endpoints))
+        d.chatProxy?.let { o.put("chat_proxy", it) }
+        d.presence?.let { o.put("presence", it) }
+        d.liveliness?.let { o.put("liveliness", it) }
+        d.via?.let { o.put("via", it) }
+        d.note?.let { o.put("note", it) }
+        d.power?.let { p ->
+            o.put(
+                "power",
+                JSONObject().put("controller", p.controller).put("key", p.key)
+                    .put("actions", JSONArray(p.actions)).put("cooldown_s", p.cooldownS)
+                    .put("confirm", JSONArray(p.confirm)).put("force_off_hold_s", p.forceOffHoldS),
+            )
+        }
+        return o
+    }
+
+    fun encodeOne(d: RegDevice): String = encodeDevice(d).toString(2)
+
     fun encode(r: DeviceRegistry): String {
         val devices = JSONArray()
-        r.devices.forEach { d ->
-            val o = JSONObject().put("id", d.id).put("name", d.name).put("kind", d.kind)
-            if (d.endpoints.isNotEmpty()) o.put("endpoints", JSONObject(d.endpoints))
-            d.chatProxy?.let { o.put("chat_proxy", it) }
-            d.presence?.let { o.put("presence", it) }
-            d.liveliness?.let { o.put("liveliness", it) }
-            d.via?.let { o.put("via", it) }
-            d.note?.let { o.put("note", it) }
-            d.power?.let { p ->
-                o.put(
-                    "power",
-                    JSONObject().put("controller", p.controller).put("key", p.key)
-                        .put("actions", JSONArray(p.actions)).put("cooldown_s", p.cooldownS)
-                        .put("confirm", JSONArray(p.confirm)).put("force_off_hold_s", p.forceOffHoldS),
-                )
-            }
-            devices.put(o)
-        }
+        r.devices.forEach { d -> devices.put(encodeDevice(d)) }
         return JSONObject().put("version", r.version).put("devices", devices).toString(2) + "\n"
     }
 

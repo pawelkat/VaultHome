@@ -181,6 +181,7 @@ class EventSyncService : Service() {
         com.vaulthome.app.towerx.TowerXMonitor.caller = { sel, payload, ms -> e.call(sel, payload, ms) }
         com.vaulthome.app.ask.ProviderMonitor.selfDevice = settings.device
         com.vaulthome.app.ask.ProviderMonitor.caller = { sel, payload, ms -> e.call(sel, payload, ms) }
+        com.vaulthome.app.ask.ProviderMonitor.querier = { sel, payload, ms -> e.callAll(sel, payload, ms) }
         com.vaulthome.app.ask.ProviderMonitor.onSessionStarted()
         running = settings
         if (settings.mode == LinkMode.ROUTER) acquireWakeLock() else releaseWakeLock()
@@ -242,6 +243,7 @@ class EventSyncService : Service() {
         com.vaulthome.app.towerx.TowerXMonitor.caller = null
         com.vaulthome.app.towerx.TowerXMonitor.onSessionClosed()
         com.vaulthome.app.ask.ProviderMonitor.caller = null
+        com.vaulthome.app.ask.ProviderMonitor.querier = null
         com.vaulthome.app.ask.ProviderMonitor.onSessionClosed()
         engine?.stop()
         engine = null

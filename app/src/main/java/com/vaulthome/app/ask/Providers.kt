@@ -90,6 +90,16 @@ object ProviderManifest {
 
     fun key(device: String) = "vault/caps/$device"
 
+    /** Wildcard GET used when a per-device key misses, or when the reply keyexpr is the query selector. */
+    const val WILDCARD = "vault/caps/**"
+
+    /**
+     * Providers in [json] hosted on [device], identified by `hostedOn.deviceId` — not the Zenoh reply key
+     * (a GET of [WILDCARD] may come back with the query selector as the reply key).
+     */
+    fun forDevice(json: String, device: String): List<Provider>? =
+        parse(json).getOrNull()?.filter { it.device == device }?.takeIf { it.isNotEmpty() }
+
     fun parse(json: String): Result<List<Provider>> = runCatching {
         val root = JSONObject(json)
         require(root.optInt("schemaVersion", -1) == SCHEMA) { "unsupported caps schemaVersion ${root.opt("schemaVersion")}" }
