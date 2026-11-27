@@ -143,6 +143,28 @@ class ZenohLink private constructor(private val session: Session, private val de
         return out.get()
     }
 
+    override fun callAll(selector: String, payload: String?, timeoutMs: Long): List<QueryReply> {
+        val out = java.util.concurrent.CopyOnWriteArrayList<QueryReply>()
+        val done = CountDownLatch(1)
+        val sel = if (device.isBlank()) Selector.tryFrom(selector).getOrThrow()
+        else Selector.tryFrom(Requester.withFrom(selector, device)).getOrThrow()
+        session.get(
+            sel,
+            callback = Callback<Reply> { r ->
+                r.result.onSuccess { s ->
+                    out.add(QueryReply(s.keyExpr.toString(), s.payload.toString()))
+                }
+            },
+            payload = payload?.let { ZBytes.from(it) },
+            timeout = Duration.ofMillis(timeoutMs),
+            target = QueryTarget.ALL,
+            consolidation = ConsolidationMode.NONE,
+            onClose = { done.countDown() },
+        ).getOrThrow()
+        done.await(timeoutMs + 1_000, TimeUnit.MILLISECONDS)
+        return out.toList()
+    }
+
     override fun serveBlobs(
         device: String,
         provider: (String, Long, Long) -> ByteArray?,

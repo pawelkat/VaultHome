@@ -32,6 +32,9 @@ data class LinkConfig(
     }
 }
 
+/** One Zenoh query reply: [key] is the sample keyexpr, [payload] the UTF-8 body. */
+data class QueryReply(val key: String, val payload: String)
+
 /** Transport used by [SyncEngine]; [ZenohLink] in production, fakes in unit tests. */
 interface EventLink : AutoCloseable {
     /** Subscribe to [VaultKey.NOTES_WILDCARD]; [onSample] gets `(key, payload)` on a transport thread. */
@@ -63,6 +66,15 @@ interface EventLink : AutoCloseable {
 
     /** One query on [selector] with an optional UTF-8 [payload]; first reply as text, `null` = no reply. */
     fun call(selector: String, payload: String?, timeoutMs: Long): String? = null
+
+    /**
+     * Every reply to [selector], each with the reply keyexpr (which may be the query selector itself,
+     * such as the caps wildcard, rather than `vault/caps/<device>`). Default: wraps [call] and uses the query selector as the key.
+     */
+    fun callAll(selector: String, payload: String?, timeoutMs: Long): List<QueryReply> {
+        val text = call(selector, payload, timeoutMs) ?: return emptyList()
+        return listOf(QueryReply(selector, text))
+    }
 
     /** Routers this session is linked to right now. */
     fun routerCount(): Int

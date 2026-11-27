@@ -1,6 +1,7 @@
 package com.vaulthome.app.ui
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -29,6 +30,9 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vaulthome.app.VaultHomeApp
+import com.vaulthome.app.ask.CapsAge
+import com.vaulthome.app.ask.CapsJson
+import com.vaulthome.app.ask.CapsViewer
 import com.vaulthome.app.ask.ProviderHealth
 import com.vaulthome.app.ask.ProviderMonitor
 import com.vaulthome.app.ask.ProviderRouting
@@ -110,6 +114,21 @@ fun DevicesScreen(onBack: () -> Unit) {
                     if (resolved != null && sample != null && !sample.ok) add(sample.detail.take(80))
                 }.joinToString(" · ")
                 Text(status, color = if (l == Live.Online) Green else Muted, style = MaterialTheme.typography.bodySmall)
+                if (com.vaulthome.app.ask.DeviceUrls.isChatHost(d) || d.kind == RegDevice.KIND_PC) {
+                    val ev = ProviderMonitor.evidenceFor(d.id, loaded.registry.devices)
+                    val capsLine = if (ev != null) {
+                        val age = CapsAge.line(ev.source, ev.atMs, ev.stale, now)
+                        "${CapsJson.sourceLabel(ev)} · $age"
+                    } else {
+                        "caps devices.json"
+                    }
+                    Text(
+                        capsLine,
+                        color = Muted,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.clickable { CapsViewer.show(d.id) },
+                    )
+                }
                 resolved?.let { r ->
                     Text("chat proxy  ${r.primary}" + if (r.source == com.vaulthome.app.ask.UrlSource.Derived) " (derived)" else " (${r.source.name.lowercase()})", color = Muted, style = MaterialTheme.typography.bodySmall)
                     r.lan?.let { Text("lan  $it", color = Muted, style = MaterialTheme.typography.bodySmall) }

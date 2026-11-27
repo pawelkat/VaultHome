@@ -128,6 +128,9 @@ class SyncEngine(
     /** Query [selector] on the current session from the caller's thread; `null` = not connected or no reply. */
     fun call(selector: String, payload: String?, timeoutMs: Long): String? = link?.call(selector, payload, timeoutMs)
 
+    /** Every reply to [selector], with each reply keyexpr. Empty when disconnected or nobody answered. */
+    fun callAll(selector: String, payload: String?, timeoutMs: Long): List<QueryReply> = link?.callAll(selector, payload, timeoutMs) ?: emptyList()
+
     fun catchUpNow() = worker.execute { guarded("catch-up") { catchUpOrSchedule() } }
 
     fun stop() {

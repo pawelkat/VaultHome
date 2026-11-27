@@ -8,7 +8,10 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -109,6 +112,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
             VaultHomeTheme {
+                Box(Modifier.fillMaxSize()) {
                 // Home stays in a saveable slot so its note back stack & scroll survive Settings.
                 val holder = androidx.compose.runtime.saveable.rememberSaveableStateHolder()
                 when {
@@ -131,6 +135,11 @@ class MainActivity : ComponentActivity() {
                             onRequestedNoteClosed = { openNote.value = null },
                         )
                     }
+                }
+                val capsDevice by com.vaulthome.app.ask.CapsViewer.open.collectAsStateWithLifecycle()
+                capsDevice?.let { device ->
+                    com.vaulthome.app.ui.CapsJsonSheet(device, onDismiss = { com.vaulthome.app.ask.CapsViewer.hide() })
+                }
                 }
             }
         }

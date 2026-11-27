@@ -48,6 +48,12 @@ data class Provider(
      * (e.g. `https://towerx.tailf52603.ts.net/vault/`). Not in the ontology; ignored if absent.
      */
     val linkBase: String? = null,
+    /** Where these capabilities came from; [CapsSource.Registry] when synthesised with [fromSettings]. */
+    val capsSource: CapsSource = CapsSource.Registry,
+    /** Wall-clock millis when [capsSource] last fetched this document; null for static registry defaults. */
+    val capsAtMs: Long? = null,
+    /** True when this is last-known caps (device left, session down, or Zenoh missed and cache was used). */
+    val capsStale: Boolean = false,
 ) {
     val isChat: Boolean get() = kind == KIND_CHAT && transport == TRANSPORT_PROXY
 
@@ -83,6 +89,16 @@ object ProviderManifest {
     const val SCHEMA = 2
 
     fun key(device: String) = "vault/caps/$device"
+
+    /** Wildcard GET used when a per-device key misses, or when the reply keyexpr is the query selector. */
+    const val WILDCARD = "vault/caps/**"
+
+    /**
+     * Providers in [json] hosted on [device], identified by `hostedOn.deviceId` — not the Zenoh reply key
+     * (a GET of [WILDCARD] may come back with the query selector as the reply key).
+     */
+    fun forDevice(json: String, device: String): List<Provider>? =
+        parse(json).getOrNull()?.filter { it.device == device }?.takeIf { it.isNotEmpty() }
 
     fun parse(json: String): Result<List<Provider>> = runCatching {
         val root = JSONObject(json)
@@ -235,6 +251,7 @@ object ProviderRouting {
             skills = listOf(Skills.VAULT), endpoint = "${urls.primary}/v1/chat/completions",
             transport = Provider.TRANSPORT_PROXY, scope = Provider.SCOPE_TAILNET, access = Provider.ACCESS_READ_ONLY,
             ready = true, nCtx = null, maxTokensSuggest = null, fromSettings = true, lanUrl = urls.lan,
+            capsSource = CapsSource.Registry, capsAtMs = null, capsStale = false,
         )
     }
 
