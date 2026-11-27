@@ -3,6 +3,9 @@ package com.vaulthome.app.ui
 import android.content.Intent
 import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.material3.TextButton
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -30,9 +33,21 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vaulthome.app.events.EventSyncService
 import com.vaulthome.app.events.EventSyncSettings
+import com.vaulthome.app.events.RouterProbe
+import com.vaulthome.app.events.RouterListStatus
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.async
+import androidx.compose.runtime.LaunchedEffect
 import com.vaulthome.app.events.label
-import com.vaulthome.events.EngineStatus
 import com.vaulthome.events.LinkMode
+import kotlinx.coroutines.withContext
+import com.vaulthome.events.SharedEndpoints
+import com.vaulthome.events.SharedConfig
+import com.vaulthome.events.Disk
+import com.vaulthome.app.events.SafVaultTree
 
 private val Hint = Color(0xFF8A8A8A)
 
@@ -51,6 +66,7 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit, onRequestNotifications: () -
     var tailnet by remember { mutableStateOf(settings.tailnetName) }
     var notify by remember { mutableStateOf(settings.notifySynced) }
     var useShared by remember { mutableStateOf(settings.useSharedEndpoints) }
+    var add by remember { mutableStateOf("") }
     val writeGranted = remember(svc, settings) {
         val tree = graph.store.treeUri()
         tree != null && ctx.contentResolver.persistedUriPermissions.any { it.uri == tree && it.isWritePermission }
@@ -93,22 +109,152 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit, onRequestNotifications: () -
         modifier = Modifier.fillMaxWidth(),
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
     )
-    OutlinedTextField(
-        value = connect,
-        onValueChange = { connect = it },
-        label = { Text("Connect endpoints (Zenoh connect list), comma separated", color = Muted) },
-        singleLine = false,
-        modifier = Modifier.fillMaxWidth(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Next),
-    )
+    Text("Zenoh router list", color = Ink)
     Text(
-        "Defaults: note4, nitro5, Latitude and desktop-sdf3lgo on the tailnet. Hosts without a router just fail to dial " +
-            "and are retried. The Grok Bot box (grokbot-user-155710816) is not dialable: its hub connects out to a router, " +
-            "e.g. this phone in Router mode.",
+        "Routers this phone dials, in order. Add one per row or paste several separated by comma, space or a new line " +
+            "(tcp/host:7447 — also udp, tls, quic). Duplicates are dropped. In Client mode Zenoh links to one router " +
+            "at a time (usually the first in this list that answers); the others are failover if that host is down, " +
+            "not simultaneous sessions. A TCP probe of port 7447 is shown on each row so you can see which hosts are " +
+            "listening. This list is used first; if “Use shared endpoint list” is on, dialable routers and other devices from " +
+            "app_settings/VaultEvents/endpoints.json are added after it (they do not replace what you type). " +
+            "The Grok Bot box is outbound-only and is never dialed. The chat-proxy tailnet suffix is taken from the first " +
+            "*.ts.net entry here.",
         color = Hint, style = MaterialTheme.typography.bodySmall,
     )
+    val routers = EventSyncSettings.parseList(connect)
+    var shared by remember { mutableStateOf<SharedConfig?>(null) }
+    LaunchedEffect(useShared, writeGranted, svc.status.lastCatchUp, svc.running) {
+        if (!useShared) { shared = null; return@LaunchedEffect }
+        val tree = graph.store.treeUri()
+        if (tree == null) { shared = null; return@LaunchedEffect }
+        shared = withContext(Dispatchers.IO) {
+            SharedEndpoints.parse((SafVaultTree(ctx, tree).read(SharedEndpoints.PATH) as? Disk.Present)?.bytes)
+        }
+    }
+    val dialed = remember(routers, shared, useShared, device, mode, tailnet, listen) {
+        val self = draft.selfEntry()
+        if (!useShared) {
+            routers.mapNotNull { ep ->
+                SharedEndpoints.normalizeEndpoint(ep)?.let { SharedEndpoints.DialTarget(it, SharedEndpoints.DialSource.SETTINGS) }
+            }
+        } else {
+            SharedEndpoints.dialTargets(routers, shared, self)
+        }
+    }
+    val vaultRows = dialed.filter { it.source == SharedEndpoints.DialSource.VAULT }
+    val probeList = (routers + vaultRows.map { it.endpoint }).distinct()
+    var reach by remember { mutableStateOf<Map<String, RouterListStatus.Reach>>(emptyMap()) }
+    LaunchedEffect(probeList) {
+        reach = probeList.associateWith { RouterListStatus.Reach.CHECKING }
+        while (true) {
+            val next = coroutineScope {
+                probeList.map { ep ->
+                    async(Dispatchers.IO) {
+                        ep to if (RouterProbe.tcpOpen(ep)) RouterListStatus.Reach.REACHABLE else RouterListStatus.Reach.UNREACHABLE
+                    }
+                }.awaitAll().toMap()
+            }
+            reach = next
+            delay(RouterProbe.INTERVAL_MS)
+        }
+    }
+    routers.forEachIndexed { i, ep ->
+        val err = EventSyncSettings.endpointProblem(ep)
+        val host = RouterListStatus.parse(ep)?.host
+        val label = buildString {
+            append("Router ${i + 1}")
+            if (host != null) append(" · ").append(RouterListStatus.shortName(host))
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = ep,
+                onValueChange = { raw ->
+                    val parts = EventSyncSettings.parseList(raw)
+                    val next = routers.take(i) + parts + routers.drop(i + 1)
+                    connect = EventSyncSettings.encodeList(next.distinct())
+                },
+                label = { Text(label, color = Muted) },
+                isError = err != null,
+                supportingText = {
+                    if (err != null) Text(err, color = MaterialTheme.colorScheme.error)
+                    else Text(
+                        RouterListStatus.rowLabel(reach[ep]),
+                        color = when (reach[ep]) {
+                            RouterListStatus.Reach.REACHABLE -> Color(0xFF2E7D32)
+                            RouterListStatus.Reach.UNREACHABLE -> MaterialTheme.colorScheme.error
+                            else -> Hint
+                        },
+                    )
+                },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
+            )
+            TextButton(onClick = { connect = EventSyncSettings.encodeList(routers.filterIndexed { j, _ -> j != i }) }) { Text("Remove") }
+        }
+    }
+    val addProblem = add.trim().takeIf { it.isNotEmpty() }?.let { raw ->
+        EventSyncSettings.parseList(raw).mapNotNull { EventSyncSettings.endpointProblem(it) }.firstOrNull()
+    }
+    fun addRouters() {
+        val parts = EventSyncSettings.parseList(add)
+        if (parts.isEmpty()) return
+        connect = EventSyncSettings.encodeList((routers + parts).distinct())
+        add = ""
+    }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedTextField(
+            value = add,
+            onValueChange = { add = it },
+            label = { Text("Add router", color = Muted) },
+            placeholder = { Text("tcp/n910c.tailf52603.ts.net:7447", color = Hint) },
+            isError = addProblem != null,
+            singleLine = false,
+            modifier = Modifier.weight(1f),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { addRouters() }),
+        )
+        TextButton(enabled = EventSyncSettings.parseList(add).isNotEmpty(), onClick = { addRouters() }) { Text("Add") }
+    }
+    if (addProblem != null) Text(addProblem, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    if (routers.isEmpty()) Text("The list is empty — add at least one router to connect in Client mode.", color = Hint, style = MaterialTheme.typography.bodySmall)
+    if (useShared && vaultRows.isNotEmpty()) {
+        Text("From vault", color = Ink)
+        Text(
+            "Also dialed from ${SharedEndpoints.PATH} (not in the list above). These are not editable here.",
+            color = Hint, style = MaterialTheme.typography.bodySmall,
+        )
+        vaultRows.forEach { row ->
+            val host = RouterListStatus.parse(row.endpoint)?.host
+            val title = buildString {
+                append("From vault")
+                row.id?.let { append(" · ").append(it) }
+                if (host != null && (row.id == null || RouterListStatus.shortName(host) != row.id)) {
+                    append(" · ").append(RouterListStatus.shortName(host))
+                }
+            }
+            OutlinedTextField(
+                value = row.endpoint,
+                onValueChange = {},
+                readOnly = true,
+                label = { Text(title, color = Muted) },
+                supportingText = {
+                    Text(
+                        RouterListStatus.rowLabel(reach[row.endpoint]),
+                        color = when (reach[row.endpoint]) {
+                            RouterListStatus.Reach.REACHABLE -> Color(0xFF2E7D32)
+                            RouterListStatus.Reach.UNREACHABLE -> MaterialTheme.colorScheme.error
+                            else -> Hint
+                        },
+                    )
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column2("Use shared endpoint list", "Read and update ${com.vaulthome.events.SharedEndpoints.PATH} in the vault: adds other devices' routers to the connect list and writes this phone's entry (device, mode, listen, Tailscale name, last seen).", Modifier.weight(1f))
+        Column2("Use shared endpoint list", "Read and update ${SharedEndpoints.PATH} in the vault. Extra dialable routers from that file appear as “from vault” rows under the list you type (this list stays first; same host is kept once). Also writes this phone's entry (device, mode, listen, Tailscale name, last seen).", Modifier.weight(1f))
         Switch(checked = useShared, onCheckedChange = { useShared = it })
     }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -178,7 +324,7 @@ fun EventSyncSection(onGrantVaultWrite: () -> Unit, onRequestNotifications: () -
             useShared = true
         }) { Text("Defaults") }
     }
-    Text(statusLine(settings.enabled, svc), color = Ink, style = MaterialTheme.typography.bodySmall)
+    Text(RouterListStatus.statusLine(settings.enabled, svc, dialed.map { it.endpoint }, fromVault = vaultRows.size), color = Ink, style = MaterialTheme.typography.bodySmall)
     svc.status.lastEvent?.let { ev ->
         val at = svc.status.lastEventAtMs?.let { java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(it)) }
         Text("Last event: $ev${at?.let { " at $it" } ?: ""}", color = Hint, style = MaterialTheme.typography.bodySmall)
@@ -205,21 +351,8 @@ private fun Column2(title: String, hint: String, modifier: Modifier = Modifier) 
 }
 
 private fun modeHint(m: LinkMode) = when (m) {
-    LinkMode.CLIENT -> "Connect to a router (note4 or the box hub). Recommended."
+    LinkMode.CLIENT -> "Link to one router at a time (the first in the list that answers). Recommended. Peer mode can keep more than one link open; that is a larger change and is not switched on here."
     LinkMode.PEER -> "Connect directly to the endpoints and accept peers on the listen endpoint."
     LinkMode.ROUTER -> "This phone is the router other devices connect to."
 }
 
-private fun statusLine(enabled: Boolean, s: com.vaulthome.app.events.EventSyncState): String {
-    if (!enabled) return "Status: off"
-    if (!s.running) return "Status: not running"
-    val st = s.status
-    val phase = when (st.phase) {
-        EngineStatus.Phase.CONNECTED -> "connected"
-        EngineStatus.Phase.CONNECTING -> "connecting"
-        EngineStatus.Phase.ERROR -> "error"
-        EngineStatus.Phase.STOPPED -> "stopped"
-    }
-    return "Status: $phase (${s.endpoint ?: ""}) · ${st.routers} routers · ${st.peers} peers · ${st.tracked} notes tracked · " +
-        "${st.published} sent · ${st.applied} applied · ${st.conflicts} conflicts"
-}

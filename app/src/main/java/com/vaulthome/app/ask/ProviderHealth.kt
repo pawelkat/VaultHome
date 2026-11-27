@@ -26,10 +26,15 @@ object ProviderProbe {
     suspend fun probe(gateway: NitroGateway, providers: List<Provider>, report: (String, Boolean, String) -> Unit = ProviderHealth::report) = coroutineScope {
         providers.filter { it.isChat }.distinctBy { it.device }.map { p ->
             async {
-                val (ok, detail) = when (val h = gateway.health(p.baseUrl)) {
-                    Health.Ok -> true to "up"
-                    is Health.Loading -> false to "not ready (${h.detail.take(160)})"
-                    is Health.Down -> false to h.reason
+                var ok = false
+                var detail = "no URL"
+                for (url in p.urls()) {
+                    val h = gateway.health(url)
+                    when (h) {
+                        Health.Ok -> { ok = true; detail = "up"; break }
+                        is Health.Loading -> { ok = false; detail = "not ready (${h.detail.take(160)})" }
+                        is Health.Down -> { ok = false; detail = h.reason }
+                    }
                 }
                 report(p.device, ok, detail)
             }

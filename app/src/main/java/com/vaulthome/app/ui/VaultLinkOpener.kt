@@ -3,8 +3,9 @@ package com.vaulthome.app.ui
 import android.content.Context
 import android.widget.Toast
 import com.vaulthome.app.VaultHomeApp
-import com.vaulthome.app.ask.AskSettings
+import com.vaulthome.app.ask.DeviceUrls
 import com.vaulthome.app.ask.ProviderMonitor
+import com.vaulthome.app.ask.TailnetUrls
 import com.vaulthome.app.markdown.VaultLinks
 import com.vaulthome.app.markdown.WikiLinks
 import kotlinx.coroutines.CoroutineScope
@@ -20,17 +21,14 @@ import kotlinx.coroutines.withContext
 object VaultLinkOpener {
     fun linkBases(context: Context): List<String> {
         val graph = (context.applicationContext as VaultHomeApp).graph
-        val s = graph.askSettings.state.value
+        val suffix = TailnetUrls.suffix(graph.eventSync.state.value.connect)
+        val urls = graph.deviceRegistry.state.value.registry.devices
+            .filter(DeviceUrls::isChatHost)
+            .flatMap { DeviceUrls.resolve(it.id, suffix, it).urls() }
         val fromCaps = ProviderMonitor.state.value.manifests.values.flatten().mapNotNull { it.linkBase }
         val fromEndpoints = ProviderMonitor.state.value.manifests.values.flatten()
             .filter { it.isChat }.map { it.baseUrl }
-        return VaultLinks.linkBasesOf(
-            listOf(
-                s.nitroBaseUrl, s.towerxBaseUrl,
-                AskSettings.TAILSCALE_NITRO_URL, AskSettings.DEFAULT_NITRO_URL, AskSettings.DEFAULT_TOWERX_URL,
-            ) + fromEndpoints,
-            extra = fromCaps,
-        )
+        return VaultLinks.linkBasesOf(urls + fromEndpoints, extra = fromCaps)
     }
 
     /** Markdown link tap. */

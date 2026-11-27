@@ -15,6 +15,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -49,6 +50,9 @@ fun ProvidersScreen(onBack: () -> Unit) {
     val graph = (ctx.applicationContext as VaultHomeApp).graph
     val store = graph.askSettings
     val ask by store.state.collectAsStateWithLifecycle()
+    val loaded by graph.deviceRegistry.state.collectAsStateWithLifecycle()
+    val ev by graph.eventSync.state.collectAsStateWithLifecycle()
+    val suffix = com.vaulthome.app.ask.TailnetUrls.suffix(ev.connect)
     val ps by ProviderMonitor.state.collectAsStateWithLifecycle()
     val health by ProviderHealth.state.collectAsStateWithLifecycle()
 
@@ -56,14 +60,14 @@ fun ProvidersScreen(onBack: () -> Unit) {
     LaunchedEffect(Unit) {
         while (true) {
             val s = store.state.value
-            val toProbe = ProviderRouting.all(ProviderMonitor.state.value.manifests, s)
+            val toProbe = ProviderRouting.all(ProviderMonitor.state.value.manifests, s, registry = loaded.registry.devices, suffix = suffix)
                 .filter { ProviderAvailability.settingsSwitch(s).availability(it) == null }
             ProviderProbe.probe(graph.nitro, toProbe)
             delay(ProviderProbe.INTERVAL_MS)
         }
     }
 
-    val all = ProviderRouting.all(ps.manifests, ask)
+    val all = ProviderRouting.all(ps.manifests, ask, registry = loaded.registry.devices, suffix = suffix)
     val sources = ProviderAvailability.chain(ask, { ps.alive[it] }, { health[it] })
     val state = all.associate { it.id to ProviderAvailability.of(it, ask.skills, sources) }
     val chat = all.filter { it.isChat }
@@ -93,21 +97,31 @@ fun ProvidersScreen(onBack: () -> Unit) {
             val usable = a.routable
             val pinned = ask.pinnedProviderId == p.id
             val ink = if (usable) Ink else Muted.copy(alpha = 0.55f)
-            Row(
-                Modifier.fillMaxWidth().let { if (usable) it.selectable(selected = pinned, onClick = { store.update { s -> s.copy(pinnedProviderId = p.id) } }) else it },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RadioButton(selected = pinned, onClick = null, enabled = usable)
-                Column(Modifier.padding(start = 8.dp)) {
-                    Text("${p.title} · ${p.hostLabel}", color = ink)
-                    val detail = buildList {
-                        add(a.label)
-                        if (pinned && !usable) add("pinned, skipped while ${a.label}")
-                        add("skills ${p.skills.joinToString("/")}")
-                        p.nCtx?.let { add("n_ctx $it") }
-                        health[p.device]?.takeIf { !it.ok }?.let { add(it.detail.take(80)) }
-                    }.joinToString(" · ")
-                    Text(detail, color = if (a == Availability.Available) Green else Muted.copy(alpha = if (usable) 1f else 0.55f), style = MaterialTheme.typography.bodySmall)
+            Column {
+                Row(
+                    Modifier.fillMaxWidth().let { if (usable) it.selectable(selected = pinned, onClick = { store.update { s -> s.copy(pinnedProviderId = p.id) } }) else it },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    RadioButton(selected = pinned, onClick = null, enabled = usable)
+                    Column(Modifier.padding(start = 8.dp)) {
+                        Text("${p.title} · ${p.hostLabel}", color = ink)
+                        val detail = buildList {
+                            add(a.label)
+                            if (pinned && !usable) add("pinned, skipped while ${a.label}")
+                            add("skills ${p.skills.joinToString("/")}")
+                            p.nCtx?.let { add("n_ctx $it") }
+                            health[p.device]?.takeIf { !it.ok }?.let { add(it.detail.take(80)) }
+                        }.joinToString(" · ")
+                        Text(detail, color = if (a == Availability.Available) Green else Muted.copy(alpha = if (usable) 1f else 0.55f), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                // Outside the selectable row so toggling it does not also pin the provider.
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 40.dp)) {
+                    Switch(
+                        checked = p.id in ask.excludedProviderIds,
+                        onCheckedChange = { off -> store.update { it.exclude(p.id, off) } },
+                    )
+                    Text("Don't use for Ask", color = Ink, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 8.dp))
                 }
             }
         }
@@ -131,6 +145,7 @@ fun ProvidersScreen(onBack: () -> Unit) {
             OutlinedButton(onClick = { store.update { it.copy(skills = setOf(Skills.VAULT)) } }) { Text("Use Vault only") }
         }
         ps.errors.forEach { (d, e) -> Text("$d caps: $e", color = Muted, style = MaterialTheme.typography.bodySmall) }
-        Text("URLs and on/off switches per host stay in Settings.", color = Muted, style = MaterialTheme.typography.bodySmall)
+        Text("Chat proxy URLs are derived from the tailnet (https://<device>.$suffix) or devices.json; caps manifests override both.", color = Muted, style = MaterialTheme.typography.bodySmall)
+        OutlinedButton(onClick = { com.vaulthome.app.devices.DevicesNav.show() }) { Text("Devices: status and power") }
     }
 }

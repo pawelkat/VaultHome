@@ -72,12 +72,17 @@ class AskOrchestrator(
     private val now: () -> Long = System::currentTimeMillis,
     /** Reports each `/health` result per device (for the Settings indicators). */
     private val onHealth: (String, Boolean, String) -> Unit = { _, _, _ -> },
+    /** devices.json (and the built-in list); used with [routerEndpoints] to resolve chat-proxy URLs. */
+    private val registry: () -> List<com.vaulthome.app.devices.RegDevice> = { com.vaulthome.app.devices.DeviceRegistryJson.bundled().devices },
+    /** Configured Zenoh connect endpoints, for the tailnet suffix. */
+    private val routerEndpoints: () -> List<String> = { emptyList() },
 ) {
     /** The providers [ask] would try right now, in order (also used by the badge and the Providers panel). */
     fun routing(): Routing {
         val s = settings()
         val sources = ProviderAvailability.chain(s, deviceAlive, healthSample, now)
-        return ProviderRouting.route(ProviderRouting.all(manifests(), s), s.pinnedProviderId, s.skills) { ProviderAvailability.of(it, s.skills, sources) }
+        val all = ProviderRouting.all(manifests(), s, registry = registry(), suffix = TailnetUrls.suffix(routerEndpoints()))
+        return ProviderRouting.route(all, s.pinnedProviderId, s.skills) { ProviderAvailability.of(it, s.skills, sources) }
     }
 
     suspend fun ask(question: String, onPhase: (AskPhase) -> Unit = {}): AskOutcome = coroutineScope {
@@ -95,13 +100,7 @@ class AskOrchestrator(
         var detail = if (notes.isEmpty()) "No chat provider is enabled in Settings" else ""
         for ((index, p) in routing.order.withIndex()) {
             onPhase(AskPhase.CheckingNitro)
-            var health = nitro.health(p.baseUrl)
-            // Over Tailscale the first packet often has to wake the path (DERP/peer setup), so one slow /health
-            // must not end the ask: retry once, and treat a health *timeout* as "unknown" and try chat anyway.
-            if (health is Health.Down && health.reason.contains("timed out")) {
-                health = nitro.health(p.baseUrl)
-                if (health is Health.Down && health.reason.contains("timed out")) health = Health.Ok
-            }
+            val (health, url) = probe(p)
             onHealth(p.device, health == Health.Ok, describe(health))
             var failure: String
             when (health) {
@@ -109,7 +108,7 @@ class AskOrchestrator(
                     onPhase(AskPhase.AskingNitro)
                     try {
                         val (options, sizing) = ProviderRouting.options(p, config.skills)
-                        val reply = nitro.chat(p.baseUrl, NitroPrompt.messages(q), options)
+                        val reply = nitro.chat(url, NitroPrompt.messages(q), options)
                         // The provider's answer cites its own sources; the on-device search was only a fallback.
                         hitsJob.cancel()
                         return@coroutineScope AskOutcome.Nitro(reply.content, reply.model, emptyList(), null, host = p.hostLabel, sizingNote = sizing)
@@ -157,6 +156,29 @@ class AskOrchestrator(
         throw e
     } catch (e: Exception) {
         Hits(emptyList(), e.message ?: "Search failed")
+    }
+
+
+    /**
+     * `/health` on the tailnet (or manifest) URL first; if that is down and devices.json listed a lan endpoint,
+     * try the lan URL. Over Tailscale the first packet often has to wake the path (DERP/peer setup), so one slow
+     * `/health` must not end the ask: retry a timeout once, and treat a second timeout as "unknown" and try chat.
+     */
+    private suspend fun probe(p: Provider): Pair<Health, String> {
+        var last: Health = Health.Down("no URL")
+        var lastUrl = p.baseUrl
+        for (url in p.urls()) {
+            lastUrl = url
+            var health = nitro.health(url)
+            if (health is Health.Down && health.reason.contains("timed out")) {
+                health = nitro.health(url)
+                if (health is Health.Down && health.reason.contains("timed out")) health = Health.Ok
+            }
+            last = health
+            if (health is Health.Down) continue
+            return health to url
+        }
+        return last to lastUrl
     }
 
     companion object {

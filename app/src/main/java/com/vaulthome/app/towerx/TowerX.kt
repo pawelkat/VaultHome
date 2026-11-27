@@ -17,7 +17,7 @@ object TowerXKeys {
     /** vault-events agent on TowerX. */
     const val AGENT_TOKEN = "vault/presence/towerx"
     const val OFF_PAYLOAD = """{"confirm":true}"""
-    fun call(tool: String) = "$POWER_TOKEN/call/$tool"
+    fun call(tool: String, key: String = POWER_TOKEN) = "$key/call/$tool"
     val WATCH = listOf(POWER_TOKEN, AGENT_TOKEN)
 }
 
@@ -87,16 +87,20 @@ object TowerXMonitor {
 
     fun onHealth(ok: Boolean, detail: String) = mutable.update { it.copy(healthOk = ok, healthDetail = detail) }
 
-    suspend fun power(action: PowerAction, confirmed: Boolean = false): Result<String> {
+    /**
+     * [key] is the board's Zenoh key prefix from the registry's power descriptor. Only [TowerXKeys.POWER_TOKEN] has a
+     * liveliness source today; any other key is refused until the monitor learns to watch it.
+     */
+    suspend fun power(action: PowerAction, confirmed: Boolean = false, key: String = TowerXKeys.POWER_TOKEN): Result<String> {
         val c = caller
-        TowerXRules.refuse(action, mutable.value.espAlive, c != null, confirmed)?.let {
+        TowerXRules.refuse(action, if (key == TowerXKeys.POWER_TOKEN) mutable.value.espAlive else null, c != null, confirmed)?.let {
             mutable.update { s -> s.copy(lastReply = it) }
             return Result.failure(IllegalStateException(it))
         }
         mutable.update { it.copy(busy = true) }
         val r = withContext(Dispatchers.IO) {
             TowerXRules.parseReply(
-                runCatching { c!!(TowerXKeys.call(action.tool), if (action == PowerAction.Off) TowerXKeys.OFF_PAYLOAD else null, 15_000) }.getOrNull(),
+                runCatching { c!!(TowerXKeys.call(action.tool, key), if (action == PowerAction.Off) TowerXKeys.OFF_PAYLOAD else null, 15_000) }.getOrNull(),
             )
         }
         mutable.update { it.copy(busy = false, lastReply = r.fold({ v -> "${action.label}: $v" }, { e -> "${action.label} failed: ${e.message}" })) }

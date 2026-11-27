@@ -48,8 +48,6 @@ class AskViewModel(app: Application) : AndroidViewModel(app) {
     private var job: Job? = null
 
     /** Settings "Test" button result. */
-    private val healthFlow = MutableStateFlow<String?>(null)
-    val healthText: StateFlow<String?> = healthFlow
 
     fun onQuestionChange(value: String) {
         flow.value = flow.value.copy(question = value)
@@ -115,18 +113,6 @@ class AskViewModel(app: Application) : AndroidViewModel(app) {
     fun cancel() {
         job?.cancel()
         flow.value = flow.value.copy(phase = null)
-    }
-
-    fun testNitro() {
-        val url = graph.askSettings.state.value.nitroBaseUrl
-        healthFlow.value = "Checking $url/health…"
-        viewModelScope.launch {
-            healthFlow.value = when (val h = graph.nitro.health(url)) {
-                Health.Ok -> "Nitro is up"
-                is Health.Loading -> "Nitro is loading: ${h.detail}"
-                is Health.Down -> "Nitro unreachable: ${h.reason}"
-            }
-        }
     }
 
     override fun onCleared() {

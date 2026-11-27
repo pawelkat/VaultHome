@@ -44,7 +44,6 @@ fun SettingsScreen(
     viewModel: VaultHomeViewModel,
     onPickVault: () -> Unit,
     onBack: () -> Unit,
-    askViewModel: com.vaulthome.app.ask.AskViewModel? = null,
     onGrantVaultWrite: () -> Unit = {},
     onRequestNotifications: () -> Unit = {},
 ) {
@@ -98,125 +97,27 @@ fun SettingsScreen(
         } else {
             Text("Model is in app storage", color = Color(0xFF8A8A8A))
         }
-        if (askViewModel != null) AskSettingsSection(askViewModel)
-        TowerXSection()
+        AskSettingsSection()
         X4SettingsSection()
         EventSyncSection(onGrantVaultWrite, onRequestNotifications)
     }
 }
 
 @Composable
-private fun AskSettingsSection(askViewModel: com.vaulthome.app.ask.AskViewModel) {
+private fun AskSettingsSection() {
     val ctx = LocalContext.current
     val store = (ctx.applicationContext as com.vaulthome.app.VaultHomeApp).graph.askSettings
     val ask by store.state.collectAsStateWithLifecycle()
-    val health by askViewModel.healthText.collectAsStateWithLifecycle()
-    var url by remember { mutableStateOf(ask.nitroBaseUrl) }
     Text("Ask", style = MaterialTheme.typography.titleMedium, color = Ink)
     SwitchRow("Show Ask ↔ Search switch", ask.askEnabled) { v -> store.update { it.copy(askEnabled = v) } }
-    SwitchRow("Use Nitro for Ask", ask.nitroEnabled) { v -> store.update { it.copy(nitroEnabled = v) } }
-    OutlinedTextField(
-        value = url,
-        onValueChange = { url = it },
-        label = { Text("Nitro chat proxy URL", color = Muted) },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = { store.update { it.copy(nitroBaseUrl = url) }; url = store.state.value.nitroBaseUrl }),
-    )
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = { store.update { it.copy(nitroBaseUrl = url) }; url = store.state.value.nitroBaseUrl }) { Text("Save URL") }
-        OutlinedButton(onClick = {
-            store.update { it.copy(nitroBaseUrl = url) }; url = store.state.value.nitroBaseUrl; askViewModel.testNitro()
-        }) { Text("Test /health") }
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = { url = com.vaulthome.app.ask.AskSettings.DEFAULT_NITRO_URL; store.update { it.copy(nitroBaseUrl = url) } }) { Text("Home Wi‑Fi") }
-        TextButton(onClick = { url = com.vaulthome.app.ask.AskSettings.TAILSCALE_NITRO_URL; store.update { it.copy(nitroBaseUrl = url) } }) { Text("Tailscale") }
-    }
     Text(
-        "Ask must use Nitro's chat proxy (adds the Nitro5 Qwen system prompt and runs vault_search), " +
-            "not raw llama-server. Home Wi‑Fi: http://192.168.1.18:8082. Tailscale: https://nitro5.tailf52603.ts.net. " +
-            "Raw :8080 answers without vault tools — avoid it for Ask. The Wi‑Fi URL needs the proxy listening on the LAN " +
-            "(BIND=0.0.0.0); the shipped service binds 127.0.0.1, which only Tailscale Serve reaches.",
+        "Chat proxy URLs come from the tailnet (https://<device>.<suffix>) and from devices.json if it lists endpoints. Caps manifests override both. Status and power are on the Devices and Providers pages.",
         color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
     )
-    health?.let { Text(it, color = Color(0xFF8A8A8A)) }
+    OutlinedButton(onClick = { com.vaulthome.app.devices.DevicesNav.show() }) { Text("Device status → Devices") }
     Text(
-        "Plain http works only to 192.168.1.18 and localhost; Tailscale uses HTTPS. No API key is stored. On-device answers (Gemma 4 E2B) come in a later build; until then Ask falls back to matching notes.",
+        "No API key is stored. On-device answers (Gemma 4 E2B) come in a later build; until then Ask falls back to matching notes.",
         color = Color(0xFF8A8A8A), style = MaterialTheme.typography.bodySmall,
-    )
-}
-
-@Composable
-private fun TowerXSection() {
-    val ctx = LocalContext.current
-    val graph = (ctx.applicationContext as com.vaulthome.app.VaultHomeApp).graph
-    val store = graph.askSettings
-    val ask by store.state.collectAsStateWithLifecycle()
-    val tx by com.vaulthome.app.towerx.TowerXMonitor.state.collectAsStateWithLifecycle()
-    val scope = rememberCoroutineScope()
-    var url by remember { mutableStateOf(ask.towerxBaseUrl) }
-    var confirmOff by remember { mutableStateOf(false) }
-    fun check() {
-        scope.launch {
-            val h = graph.nitro.health(store.state.value.towerxBaseUrl)
-            com.vaulthome.app.towerx.TowerXMonitor.onHealth(
-                h == com.vaulthome.app.ask.Health.Ok,
-                when (h) {
-                    com.vaulthome.app.ask.Health.Ok -> "llama-server + vault-searchd up"
-                    is com.vaulthome.app.ask.Health.Loading -> h.detail.take(160)
-                    is com.vaulthome.app.ask.Health.Down -> h.reason
-                },
-            )
-            if (com.vaulthome.app.towerx.TowerXMonitor.state.value.espAlive == true) com.vaulthome.app.towerx.TowerXMonitor.power(com.vaulthome.app.towerx.PowerAction.Status)
-        }
-    }
-    LaunchedEffect(Unit) { check() }
-    fun mark(v: Boolean?, on: String, off: String) = when (v) { true -> "● $on"; false -> "○ $off"; null -> "? unknown" }
-    Text("TowerX", style = MaterialTheme.typography.titleMedium, color = Ink)
-    Text("ESP32 power board: " + mark(tx.espAlive, "online", "offline"), color = Ink)
-    Text("TowerX agent: " + mark(tx.agentAlive, "online", "offline"), color = Ink)
-    Text("vault-searchd + LLM: " + mark(tx.healthOk, "healthy", "down") + if (tx.healthDetail.isNotBlank()) " · ${tx.healthDetail}" else "", color = Ink)
-    Text(if (tx.askAvailable) "Ask uses TowerX" else "Ask falls back (Nitro / on-device)", color = if (tx.askAvailable) Color(0xFF5CC489) else Muted)
-    if (tx.espAlive == null) Text("Turn on Event sync to see Zenoh state and use power.", color = Muted, style = MaterialTheme.typography.bodySmall)
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(enabled = !tx.busy, onClick = { check() }) { Text("Check") }
-        OutlinedButton(enabled = !tx.busy && tx.espAlive == true, onClick = {
-            scope.launch { com.vaulthome.app.towerx.TowerXMonitor.power(com.vaulthome.app.towerx.PowerAction.On) }
-        }) { Text("Turn on") }
-        OutlinedButton(enabled = !tx.busy && tx.espAlive == true, onClick = { confirmOff = true }) { Text("Force off") }
-    }
-    if (tx.lastReply.isNotBlank()) Text(tx.lastReply, color = Muted, style = MaterialTheme.typography.bodySmall)
-    if (confirmOff) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { confirmOff = false },
-            title = { Text("Force off TowerX?") },
-            text = { Text("Holds the power button for 6 s. Unsaved work on TowerX is lost.") },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmOff = false
-                    scope.launch { com.vaulthome.app.towerx.TowerXMonitor.power(com.vaulthome.app.towerx.PowerAction.Off, confirmed = true) }
-                }) { Text("Force off") }
-            },
-            dismissButton = { TextButton(onClick = { confirmOff = false }) { Text("Cancel") } },
-        )
-    }
-    SwitchRow("Use TowerX for Ask", ask.towerxEnabled) { v -> store.update { it.copy(towerxEnabled = v) } }
-    OutlinedTextField(
-        value = url,
-        onValueChange = { url = it },
-        label = { Text("TowerX chat proxy URL", color = Muted) },
-        singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = {
-            store.update { it.copy(towerxBaseUrl = com.vaulthome.app.ask.AskSettings.normalizeBaseUrl(url)) }; url = store.state.value.towerxBaseUrl
-        }),
-    )
-    Text(
-        "Power goes over Zenoh to the note4c bridge (devices/towerx-power). After a pulse the board ignores another for 45 s.",
-        color = Muted, style = MaterialTheme.typography.bodySmall,
     )
 }
 
