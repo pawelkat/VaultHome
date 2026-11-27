@@ -49,6 +49,19 @@ class ProvidersTest {
         assertFalse(list[0].ready)
     }
 
+    @Test fun optionalLinkBaseIsReadAndUnknownKeysAreIgnored() {
+        val list = ProviderManifest.parse(
+            """{"schemaVersion":1,"device":"towerx","providers":[
+                {"id":"t","kind":"llm-chat","endpoint":"https://towerx.tailf52603.ts.net/v1/chat/completions",
+                 "transport":"chat-proxy","linkBase":"https://towerx.tailf52603.ts.net/vault/","extra":1}
+            ]}"""
+        ).getOrThrow()
+        assertEquals("https://towerx.tailf52603.ts.net/vault/", list.single().linkBase)
+        assertNull(ProviderManifest.parse(
+            """{"schemaVersion":1,"device":"d","providers":[{"id":"a","kind":"llm-chat"}]}"""
+        ).getOrThrow().single().linkBase)
+    }
+
     @Test fun capsKey() = assertEquals("vault/caps/nitro5", ProviderManifest.key("nitro5"))
 
     private fun avail(
@@ -193,6 +206,23 @@ class ProvidersTest {
         assertEquals(ChatOptions(2048, listOf("code")), ProviderRouting.options(p, setOf("code")).first)
     }
 
+    @Test fun tokenCapFallsBackTo1024OnlyForNitroWhenNCtxIsUnknown() {
+        val nitro = chat("nitro5", "nitro5-qwen") // fromSettings-like: n_ctx and suggest both missing
+        val tower = chat("towerx", "towerx-qwen")
+        val other = chat("box", "box-qwen")
+        assertEquals(ChatOptions(1024, null) to "n_ctx unknown: using 1024 tokens", ProviderRouting.options(nitro, setOf("vault")))
+        assertEquals(ChatOptions(null, null) to null, ProviderRouting.options(tower, setOf("vault")))
+        assertEquals(ChatOptions(null, null) to null, ProviderRouting.options(other, setOf("vault")))
+        // maxTokensSuggest still wins when present, even if n_ctx is missing; no fallback note.
+        val suggested = chat("towerx", "t").copy(maxTokensSuggest = 2048)
+        assertEquals(ChatOptions(2048, null) to null, ProviderRouting.options(suggested, setOf("vault")))
+        val nitroSuggested = chat("nitro5", "n").copy(maxTokensSuggest = 1536)
+        assertEquals(ChatOptions(1536, null) to null, ProviderRouting.options(nitroSuggested, setOf("vault")))
+        // n_ctx known, no suggest: omit max_tokens (server decides); no note.
+        val known = chat("nitro5", "n").copy(nCtx = 16384)
+        assertEquals(ChatOptions(null, null) to null, ProviderRouting.options(known, setOf("vault")))
+    }
+
     @Test fun monitorTracksPresenceFetchesCapsAndDropsOnLeave() {
         val asked = mutableListOf<String>()
         ProviderMonitor.onSessionClosed()
@@ -228,8 +258,10 @@ class ProvidersTest {
 
     @Test fun chatJsonCarriesMaxTokensAndOptionalSkills() {
         val plain = org.json.JSONObject(ChatJson.request(listOf(ChatMessage("user", "q"))))
-        assertEquals(1024, plain.getInt("max_tokens"))
+        assertFalse("max_tokens is omitted when unset, so the server decides", plain.has("max_tokens"))
         assertFalse(plain.has("skills"))
+        val capped = org.json.JSONObject(ChatJson.request(listOf(ChatMessage("user", "q")), ChatOptions(1024)))
+        assertEquals(1024, capped.getInt("max_tokens"))
         val sized = org.json.JSONObject(ChatJson.request(listOf(ChatMessage("user", "q")), ChatOptions(2048, listOf("code", "vault"))))
         assertEquals(2048, sized.getInt("max_tokens"))
         assertEquals("code", sized.getJSONArray("skills").getString(0))

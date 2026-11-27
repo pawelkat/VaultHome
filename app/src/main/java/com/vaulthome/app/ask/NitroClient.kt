@@ -26,10 +26,10 @@ interface NitroGateway {
 data class ChatMessage(val role: String, val content: String)
 
 /**
- * Per-request sizing from the provider manifest. [skills] is the proposed `skills` request field; `null` omits it
- * (vault only, today's behaviour).
+ * Per-request sizing from the provider manifest. [maxTokens] `null` omits `max_tokens` (the server decides).
+ * [skills] is the proposed `skills` request field; `null` omits it (vault only, today's behaviour).
  */
-data class ChatOptions(val maxTokens: Int = 1024, val skills: List<String>? = null)
+data class ChatOptions(val maxTokens: Int? = null, val skills: List<String>? = null)
 data class ChatReply(val content: String, val model: String?)
 
 class NitroException(message: String, cause: Throwable? = null) : IOException(message, cause)
@@ -135,9 +135,9 @@ object ChatJson {
             .put("messages", array)
             .put("stream", false)
             .put("temperature", 0.3)
-            .put("max_tokens", options.maxTokens)
             // Qwen3.x on llama-server: skip the thinking pass so the phone gets an answer sooner.
             .put("chat_template_kwargs", JSONObject().put("enable_thinking", false))
+        options.maxTokens?.let { body.put("max_tokens", it) }
         options.skills?.let { body.put("skills", JSONArray(it)) }
         return body.toString()
     }

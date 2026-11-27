@@ -152,11 +152,20 @@ class AskOrchestratorTest {
         assertEquals(null, out.sizingNote)
     }
 
-    @Test fun missingNCtxKeepsThousandTokensAndSaysSo() = runBlocking {
+    @Test fun missingNCtxKeepsThousandTokensAndSaysSoForNitroOnly() = runBlocking {
         val gw = FakeNitro()
         val out = orchestrator(gw).ask("q") as AskOutcome.Nitro
         assertEquals(ChatOptions(1024, null), gw.options.single())
         assertEquals("n_ctx unknown: using 1024 tokens", out.sizingNote)
+    }
+
+    @Test fun missingNCtxOmitsMaxTokensForTowerXAndHasNoSizingNote() = runBlocking {
+        val gw = TwoHosts(Health.Ok, nitro = Health.Down("x"))
+        // Settings-synthesised TowerX provider has no n_ctx / maxTokensSuggest.
+        val out = withTowerX(gw, agent = true, settings = AskSettings(excludedProviderIds = setOf(ProviderRouting.NITRO_PROVIDER_ID))).ask("q") as AskOutcome.Nitro
+        assertEquals("TowerX", out.host)
+        assertEquals(ChatOptions(null, null), gw.options.single())
+        assertEquals(null, out.sizingNote)
     }
 
     @Test fun codeSkillOnlyGoesToProvidersThatAdvertiseIt() = runBlocking {
